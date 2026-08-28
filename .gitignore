@@ -1,0 +1,8 @@
+# Build output
+/build/
+/r2r/
+/_cache/
+/release/
+
+# Host test binary
+/tests/hosttest
