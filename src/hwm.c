@@ -22,9 +22,16 @@
 
 static uint8_t hwm[8];
 
-/* fuji_read_appkey memmoves a 2-byte count prefix down over the payload, so
-   the buffer has to be keysize + 2. A 64-byte buffer corrupts two bytes past
-   its end. fuji_write_appkey reads the full 64 regardless of the count. */
+/*
+ * 66 for an 8-byte key, and both buses have their own reason for it.
+ *
+ * SIO: fuji_read_appkey reads keysize + 2 and then memmoves the 2-byte count
+ * prefix down over the payload, so a 64-byte buffer corrupts two bytes past its
+ * end. SmartPort: it does an unconditional memset(data, 0, 64) before copying
+ * whatever the device returned, so anything under 64 corrupts regardless of how
+ * short the key is. 66 satisfies both, and fuji_write_appkey reads the full 64
+ * either way. Do not shrink this to fit the key.
+ */
 static uint8_t akbuf[66];
 
 void hwm_load(void)

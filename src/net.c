@@ -88,25 +88,52 @@ static unsigned char st_ok(unsigned char code)
 }
 
 /*
- * Why a failed open is not followed by another network_status(): the Atari
- * bus layer has already done it. atari/src/bus/bus_status.s sees the device
- * error (144), re-queries with network_status_unit to pull the extended
- * information, leaves the protocol's own status byte in fn_network_error, and
- * only then reports the failure. Asking again would mean querying a channel
- * that never opened.
+ * Recover the protocol's own status byte from a failed open. The two buses
+ * answer this question in completely different places.
  *
- * Anything other than 144 -- 138 timeout, 139 NAK, 143 checksum -- means the
- * device never gave us a usable reply, which is the timeout case.
+ * SIO: the Atari bus layer has already asked. atari/src/bus/bus_status.s sees
+ * the device error (144), re-queries with network_status_unit to pull the
+ * extended information, leaves the protocol's status byte in fn_network_error,
+ * and only then reports the failure. Asking again would mean querying a channel
+ * that never opened. Anything other than 144 -- 138 timeout, 139 NAK, 143
+ * checksum -- means the device never gave us a usable reply at all.
+ *
+ * SmartPort: nobody has asked, and 144 is not even in the value space. The
+ * apple2 bus layer stores a SmartPort code in fn_device_error (sp.inc: $00-$02,
+ * $06, $11, $21-$2F, $30-$3F, $50, $7F), and fn_network_error is only ever
+ * written by network_read and by the Atari's bus_status. So the 144 test can
+ * never fire and every failed open would report as a timeout -- including the
+ * 212 that means "authorize Google in the Web UI", which is the one error a
+ * first-time user is guaranteed to hit and the one that has to name itself.
+ *
+ * The fix is to ask, once. The channel is still addressable because
+ * network_open set the unit before issuing the control command, and
+ * network_status needs nothing else.
  */
 static unsigned char open_error(void)
 {
     /* Capture the raw device code now: the network_close() on the way out of
-       the failure path issues another SIO command and overwrites it. */
+       the failure path issues another device command and overwrites it. */
     gm_dev_ecode = fn_device_error;
 
+#ifdef __APPLE2__
+    {
+        unsigned char dev  = gm_dev_ecode;
+        unsigned char code = probe();
+
+        /* probe() overwrites gm_dev_ecode when the status call itself fails.
+           The open's code is the one worth reporting, so put it back. */
+        gm_dev_ecode = dev;
+
+        /* GM_NOREPLY means the status call failed too, which on this bus is
+           the only thing that really is "no reply". */
+        return (code == GM_NOREPLY) ? 0 : code;
+    }
+#else
     if (fn_device_error == 144)
         return fn_network_error;
     return 0;
+#endif
 }
 
 /*
@@ -348,6 +375,12 @@ unsigned char gm_fetch_body(const char *msgnum)
 
 #define FAKE_TOTAL  137
 
+/* 2026-08-29 14:32:00 UTC, the newest canned message, and two and a half hours
+   between each. The canned clock in clock.c is the same day, so the newest
+   entry reads as this morning rather than as something from the archive. */
+#define FAKE_EPOCH  1788013920UL
+#define FAKE_STEP   9000UL
+
 static const char *const fake_name[8] = {
     "Alice Kim",
     "",                                     /* falls back to the address */
@@ -358,10 +391,15 @@ static const char *const fake_name[8] = {
     "Frank|Ogilvy",                         /* the | becomes a real control
                                                byte below -- writing '\t' here
                                                would not test what it looks
-                                               like it tests, because cc65
-                                               charmaps a source-literal tab to
-                                               ATASCII $7F, which is a
-                                               *high* byte, not a control one */
+                                               like it tests on the Atari,
+                                               because cc65 charmaps a
+                                               source-literal tab to ATASCII
+                                               $7F, which is a *high* byte, not
+                                               a control one. apple2enh does no
+                                               literal translation, so the trap
+                                               is Atari-only -- but the
+                                               substitution is what makes the
+                                               canned data identical on both */
     "Grace Hopper"
 };
 
@@ -380,6 +418,7 @@ static unsigned char fake_index(unsigned long range)
 {
     unsigned char i, n, s;
     unsigned long num;
+    unsigned long secs;
 
     gm_total = FAKE_TOTAL;
     gm_range = range;
@@ -408,10 +447,27 @@ static unsigned char fake_index(unsigned long range)
         strcpy(wire.email, "someone.long.address@example.com");
         strcpy(wire.subject, fake_subj[s]);
 
-        /* Timestamps ascend with the message number, so the high-water mark
-           has something monotonic to bite on. */
-        wire.ts[0] = (unsigned char) num;
-        wire.ts[1] = (unsigned char) (num >> 8);
+        /*
+         * Timestamps ascend with the message number, so the high-water mark
+         * has something monotonic to bite on -- and they are real epoch
+         * seconds, because the date column renders them.
+         *
+         * They used to be the message number itself, which was monotonic and
+         * nothing else: as an epoch, 137 is two minutes past midnight on the
+         * 1st of January 1970, and any timezone west of UTC drags it below the
+         * epoch and date_fmt correctly refuses it. Every date on the canned
+         * screen came out blank.
+         *
+         * The year form is not reachable from one page at this spacing, which
+         * is deliberate: it is covered by tests/hosttest.c, where it is an
+         * assertion rather than something to eyeball. What the capture is for
+         * is proving the column renders at all.
+         */
+        secs = FAKE_EPOCH - (unsigned long) (range + i) * FAKE_STEP;
+        wire.ts[0] = (unsigned char) secs;
+        wire.ts[1] = (unsigned char) (secs >> 8);
+        wire.ts[2] = (unsigned char) (secs >> 16);
+        wire.ts[3] = (unsigned char) (secs >> 24);
 
         parse_rec(i);
     }
@@ -428,9 +484,14 @@ static const char *const fake_para[8] = {
     "the line and page scrolling and the paragraph handling without a FujiNet "
     "anywhere in sight, and it runs on long enough to need several pages.",
     "",
-    "Here is a token far too long to fit on a forty column row, so the "
+    /* The URL has to outrun the widest BODY_COLS any backend asks for, or the
+       hard-split path stops being exercised on the wider screen: at 40 columns
+       the old 72-character one split three ways, and at 78 it fitted on one row
+       and tested nothing. */
+    "Here is a token far too long to fit on one row, so the "
     "wrapper has to hard split it: "
-    "https://example.com/a/very/long/path/that/keeps/going/and/going/and/going",
+    "https://example.com/a/very/long/path/that/keeps/going/and/going/and/going/"
+    "and/going/and/going/until/it/cannot/possibly/fit/on/any/row/at/all",
     "",
     "Regards,",
     "The build"
@@ -459,8 +520,15 @@ static unsigned char fake_body(void)
                These are byte arrays rather than string literals on purpose.
                cc65 charmaps a literal "\n" to ATASCII $9B for the Atari, so
                "\r\n" in source would reach the ingest as CR followed by EOL --
-               two terminators, and a spurious blank row. Wire bytes never go
-               through that translation, and neither should the fake ones. */
+               two terminators, and a spurious blank row. apple2enh does no such
+               translation and would be fine either way, which is precisely why
+               the arrays stay: they make one canned body, not two.
+
+               Bare CR is not a hypothetical. Protocol.h's native_eol defaults
+               to CR and only the SIO network device overrides it to $9B, so a
+               body arriving over SmartPort, DriveWire or AdamNet really is
+               CR-terminated. This is the case that cost the calendar client an
+               entirely empty screen. */
             switch (i & 3) {
             case 0:  body_ingest(eol_atascii, 1); break;
             case 1:  body_ingest(eol_crlf,    2); break;

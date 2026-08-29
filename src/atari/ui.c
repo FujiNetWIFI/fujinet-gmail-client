@@ -38,6 +38,7 @@
 static char sbuf[64];
 static char detbuf[ENT_NAME_LEN + ENT_SUBJ_LEN + 4];
 static char wrapped[2][SCR_COLS + 1];
+static char datebuf[ENT_DATE_LEN];
 
 /* ------------------------------------------------------------------ */
 /* Transient screens                                                   */
@@ -168,10 +169,31 @@ static void draw_entry(unsigned char slot)
  * it carry the selected entry in full. It earns the space the Intellivision
  * version had to reclaim by bounce-scrolling the highlighted row.
  */
+/*
+ * The selected message's date, on the free half of the page-indicator row.
+ *
+ * Forty columns has no room for a date column in the list -- the two fields
+ * already truncate hard -- but there is exactly one message whose date matters
+ * at any moment, and row 2 was empty to the left of the indicator. It moves
+ * with the selection, so it reads as belonging to the highlighted row.
+ */
+static void draw_date(void)
+{
+    if (gm_count == 0) {
+        scr_field(2, 1, "", ENT_DATE_LEN, 0);
+        return;
+    }
+
+    date_fmt(datebuf, gm_index[gm_sel].ts);
+    scr_field(2, 1, datebuf, ENT_DATE_LEN, 0);
+}
+
 static void draw_detail(void)
 {
     unsigned int n;
     unsigned char i;
+
+    draw_date();
 
     if (gm_count == 0) {
         scr_row_clear(DETAIL_ROW);

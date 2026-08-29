@@ -1,19 +1,31 @@
 /*
  * Host-side tests for the portable text handling.
  *
- * src/wrap.c, src/sanitize.c and src/body.c have no platform or network
- * dependency, so they build and run on a normal machine. That matters: the
- * line-ending soup, the accumulator overflow and the truncation edges are the
- * fiddliest logic in the program, and iterating on them through a 6502
- * cross-compile and an emulator round-trip is far too slow.
+ * src/wrap.c, src/sanitize.c, src/body.c and src/date.c have no platform or
+ * network dependency, so they build and run on a normal machine. That matters:
+ * the line-ending soup, the accumulator overflow, the truncation edges and the
+ * calendar arithmetic are the fiddliest logic in the program, and iterating on
+ * them through a 6502 cross-compile and an emulator round-trip is far too slow.
  *
- *   make -C tests && tests/hosttest
+ * Built twice, at both screen shapes -- see tests/Makefile. hosttest is the
+ * Atari's 40 columns and hosttest80 the Apple II's 78, which is the only thing
+ * that would catch a width the wrapper cannot actually reach.
+ *
+ *   make -C tests
  */
 
 #include <stdio.h>
 #include <string.h>
 
 #include "../src/gmail.h"
+
+/*
+ * date.c reads these; clock.c defines them on a real target but cannot build
+ * here, because it is nothing but a device call. Owning them makes the timezone
+ * and the current year test inputs, which is what the offset cases below need.
+ */
+int          gm_tzoff;
+unsigned int gm_year;
 
 static int failures;
 static int checks;
@@ -114,6 +126,32 @@ static void ingest_str(const char *s)
     body_ingest((const unsigned char *) s, (unsigned int) strlen(s));
 }
 
+/*
+ * No produced row may exceed BODY_COLS.
+ *
+ * This is the assertion the second binary exists for. Everything else in this
+ * file passes at either width by construction -- the inputs are short and the
+ * wrap tests name their widths as literals -- so nothing here would notice a
+ * BODY_COLS that outran its BODY_STRIDE, a hard split off by one, or an
+ * ellipsis written past the end of a row. Those all land as a row longer than
+ * the screen, which on a real target is a blitter writing into the next line.
+ */
+static void rows_fit(const char *what)
+{
+    unsigned int i;
+
+    checks++;
+    for (i = 0; i < gm_body_rows; i++) {
+        if (strlen(gm_body[i]) > BODY_COLS) {
+            failures++;
+            printf("  FAIL %s: row %u is %u wide, cap is %u\n       \"%s\"\n",
+                   what, i, (unsigned int) strlen(gm_body[i]),
+                   (unsigned int) BODY_COLS, gm_body[i]);
+            return;
+        }
+    }
+}
+
 static void test_body(void)
 {
     unsigned int i;
@@ -195,11 +233,165 @@ static void test_body(void)
     eq_int("not truncated", gm_body_trunc, 0);
 }
 
+/*
+ * The width-dependent half, which is the whole reason this file is compiled
+ * twice. Nothing here hardcodes a column count.
+ */
+static void test_body_width(void)
+{
+    char big[BODY_COLS * 8];
+    unsigned int want, i;
+
+    puts("body ingest at BODY_COLS");
+
+    /* A paragraph of five-character tokens, long enough to wrap several times.
+       "aaaa " packs exactly (BODY_COLS + 1) / 5 tokens per row: the trailing
+       space of the last token on a row is the break, so a row holds as many
+       whole tokens as fit in BODY_COLS + 1 columns. */
+    body_reset();
+    big[0] = '\0';
+    for (i = 0; i < 40; i++)
+        strcat(big, "aaaa ");
+    ingest_str(big);
+    body_finish();
+
+    want = (40 + (BODY_COLS + 1) / 5 - 1) / ((BODY_COLS + 1) / 5);
+    eq_int("token rows scale with width", gm_body_rows, want);
+    rows_fit("token paragraph");
+
+    /* A single token three rows long has nowhere to break, so it is hard split
+       at exactly the width -- every row but the last is full. */
+    body_reset();
+    for (i = 0; i < BODY_COLS * 3; i++)
+        big[i] = 'x';
+    big[BODY_COLS * 3] = '\0';
+    ingest_str(big);
+    body_finish();
+    eq_int("hard split rows", gm_body_rows, 3);
+    rows_fit("hard split");
+    eq_int("split row 0 is full", strlen(gm_body[0]), BODY_COLS);
+    eq_int("split row 1 is full", strlen(gm_body[1]), BODY_COLS);
+    eq_int("split row 2 is full", strlen(gm_body[2]), BODY_COLS);
+
+    /* The ellipsis path writes into the last row it is allowed, which is the
+       one place a row can be built up rather than copied. */
+    body_reset();
+    for (i = 0; i < BODY_ROWS + 20; i++)
+        ingest_str(big);
+    body_finish();
+    eq_int("truncated at cap", gm_body_rows, BODY_ROWS);
+    rows_fit("at the row cap");
+}
+
+/* ------------------------------------------------------------------ */
+
+/* Little-endian into the wire's eight bytes, so a case reads as a number. */
+static void ts_set(uint8_t ts[8], unsigned long secs)
+{
+    unsigned char i;
+
+    for (i = 0; i < 8; i++)
+        ts[i] = 0;
+
+    ts[0] = (uint8_t) (secs & 0xFF);
+    ts[1] = (uint8_t) ((secs >> 8) & 0xFF);
+    ts[2] = (uint8_t) ((secs >> 16) & 0xFF);
+    ts[3] = (uint8_t) ((secs >> 24) & 0xFF);
+}
+
+static void eq_date(const char *what, unsigned long secs, const char *want)
+{
+    uint8_t ts[8];
+    char    got[ENT_DATE_LEN];
+
+    ts_set(ts, secs);
+    date_fmt(got, ts);
+    eq_str(what, got, want);
+}
+
+static void test_date(void)
+{
+    uint8_t ts[8];
+    char    got[ENT_DATE_LEN];
+
+    puts("date");
+
+    gm_tzoff = 0;
+    gm_year = 2026;
+
+    /* The everyday case: a message in the current year gets a time. */
+    eq_date("in-year gets a time", 1787927520UL, "Aug 28 14:32");
+
+    /* Outside it, the year replaces the time -- the trade every mail client
+       makes, because the time of a message from two years ago says nothing. */
+    eq_date("out-of-year gets a year", 1709208000UL, "Feb 29  2024");
+
+    /* With no clock there is no current year to compare against, so everything
+       takes the time form rather than everything taking a wrong year. */
+    gm_year = 0;
+    eq_date("no clock, still a time", 1709208000UL, "Feb 29 12:00");
+    gm_year = 2026;
+
+    /* 2100 is not a leap year. The full Gregorian rule is the only reason
+       civil_from_days gets this right, and it is the classic place to get it
+       wrong -- these two are a day apart. */
+    eq_date("2100-02-28", 4107540600UL, "Feb 28  2100");
+    eq_date("2100-03-01", 4107543300UL, "Mar 01  2100");
+
+    /* The epoch itself, and the last second a signed 32-bit time_t can hold --
+       which this code does not use, and must therefore survive. */
+    gm_year = 1970;
+    eq_date("first second", 1UL, "Jan 01 00:00");
+    gm_year = 2038;
+    eq_date("2038 rollover", 2147483647UL, "Jan 19 03:14");
+
+    /* Past 2038, where a signed intermediate would have wrapped. */
+    gm_year = 2106;
+    eq_date("2106", 4294857600UL, "Feb 06 00:00");
+
+    puts("date, timezone offsets");
+
+    /* West of UTC, carrying the date backwards over midnight -- and over a year
+       boundary, so this is also what proves the year comparison is against the
+       *local* year and not the raw UTC one. */
+    gm_tzoff = -300;                    /* CDT */
+    gm_year = 2025;
+    eq_date("west crosses midnight back", 1767241800UL, "Dec 31 23:30");
+
+    /* The same instant with the clock a year on: now it is out of year, which
+       it would not be if the offset had been applied after the comparison. */
+    gm_year = 2026;
+    eq_date("west, and the year follows it", 1767241800UL, "Dec 31  2025");
+
+    /* East of UTC, carrying it forwards, on a half-hour offset. */
+    gm_tzoff = 330;                     /* IST */
+    eq_date("east crosses midnight on", 1798749900UL, "Jan 01  2027");
+
+    gm_tzoff = 0;
+
+    /* A timestamp above the low four bytes is a date past 2106, which this wire
+       cannot legitimately carry -- so it is a corrupt record, not the future,
+       and a blank column is the honest rendering. */
+    ts_set(ts, 1787927520UL);
+    ts[4] = 1;
+    date_fmt(got, ts);
+    eq_str("high half rejected", got, "");
+
+    /* Likewise a zero, which is what an unset field looks like. */
+    eq_date("zero rejected", 0UL, "");
+}
+
 int main(void)
 {
+    printf("BODY_COLS=%u BODY_ROWS=%u LINE_CAP=%u ENT_SUBJ_LEN=%u\n\n",
+           (unsigned int) BODY_COLS, (unsigned int) BODY_ROWS,
+           (unsigned int) LINE_CAP, (unsigned int) ENT_SUBJ_LEN);
+
     test_sanitize();
     test_wrap();
     test_body();
+    test_body_width();
+    test_date();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures != 0;

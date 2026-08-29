@@ -19,19 +19,50 @@
    HTTPS round trip inside the open(), so this is deliberately modest. */
 #define IDX_MAX         16
 
-/* Wrapped body rows kept before we give up and set the truncation flag.
-   300 rows is ~12000 characters of message text and still leaves ~8K of the
-   Atari's BSS budget free; check r2r/atari/gmail.map before raising it. */
+/*
+ * Wrapped body rows kept before we give up and set the truncation flag, and
+ * the width they are wrapped to.
+ *
+ * A wider screen wants fewer rows, not more: the same message needs about half
+ * as many at 78 columns as at 40. The Atari's 300 x 40 is ~12000 characters and
+ * leaves ~8K of its BSS budget free; the Apple II's 240 x 78 is ~18700 in about
+ * 6.7K more. Check the platform's map file before raising either.
+ */
+#ifndef BODY_ROWS
 #define BODY_ROWS       300
+#endif
+#ifndef BODY_COLS
 #define BODY_COLS       40
+#endif
+
+/* Derived on purpose, and deliberately not overridable. A backend that could
+   set the stride independently of the width would eventually set one and not
+   the other, and wrap_text() would write BODY_COLS+1 bytes into a shorter row
+   with nothing to catch it. */
 #define BODY_STRIDE     (BODY_COLS + 1)
 
-/* Longest raw line accumulated before a hard flush through the wrapper. */
+/* Longest raw line accumulated before a hard flush through the wrapper. It has
+   to exceed BODY_COLS by enough that flush_overflow() has a space to break on;
+   a couple of display rows' worth is plenty. */
+#ifndef LINE_CAP
 #define LINE_CAP        200
+#endif
+
+#if LINE_CAP < BODY_COLS * 2
+#error "LINE_CAP must hold at least two display rows"
+#endif
 
 #define ENT_NUM_LEN     12      /* msgNum as ASCII decimal, NUL terminated */
-#define ENT_NAME_LEN    32
+#define ENT_NAME_LEN    32      /* the whole wire field; never needs raising */
+
+/* Truncated from the wire's 128 to fit the Atari's budget: 16 entries deep,
+   every byte here costs sixteen. A backend with room asks for more. */
+#ifndef ENT_SUBJ_LEN
 #define ENT_SUBJ_LEN    64
+#endif
+
+/* Rendered date column, "Aug 28 14:32" or "Aug 28  2024". */
+#define ENT_DATE_LEN    13
 
 /* ------------------------------------------------------------------ */
 /* Wire format                                                         */
@@ -75,8 +106,17 @@ struct wire_rec {
 #define GM_NOSERVICE    210
 #define GM_NOAUTH       212
 
-/* fn_default_timeout is in 64-frame ticks. 15 (the library default) is ~16s;
-   a GMAIL index open is ~19 sequential upstream HTTPS round trips. */
+/*
+ * fn_default_timeout is in 64-frame ticks. 15 (the library default) is ~16s;
+ * a GMAIL index open is ~19 sequential upstream HTTPS round trips.
+ *
+ * SIO only. fujinet-lib reads this in exactly one place, the Atari bus layer's
+ * copy_cmd_data.s, where it becomes DCB's DTIMLO. On SmartPort there is no
+ * host-side timeout at all -- the call is into card firmware that blocks until
+ * the FujiNet answers -- so the assignments in net.c compile, link and do
+ * nothing there. They stay because they are correct from the same source on the
+ * Atari.
+ */
 #define TMO_NORM        15
 #define TMO_LONG        90      /* ~96 seconds */
 
@@ -136,6 +176,19 @@ void          body_finish(void);
 unsigned char gm_fetch_index(unsigned long range);
 unsigned char gm_fetch_body(const char *msgnum);
 void          gm_calc_next(void);
+
+/* date.c -- render a wire timestamp into ENT_DATE_LEN bytes as "Aug 28 14:32",
+   or "Aug 28  2024" for a message outside gm_year. Pure: no platform, no
+   network, no device call. tests/hosttest.c exercises all of it. */
+void          date_fmt(char *dst, const uint8_t ts[8]);
+
+/* clock.c -- what date.c needs from the device, read once at boot. gm_tzoff is
+   minutes east of UTC and gm_year the current year, or 0 for "unknown", which
+   is also what they stay at if the FujiNet has no clock registered: dates then
+   read as UTC and always carry a time. */
+extern int          gm_tzoff;
+extern unsigned int gm_year;
+void          clock_load(void);
 
 /* hwm.c -- read/unread high-water mark, persisted in a FujiNet appkey. */
 void          hwm_load(void);

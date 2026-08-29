@@ -116,6 +116,10 @@ int main(void)
         ui_splash();
     }
 
+    /* Before hwm_load() only because both are boot-time device calls and this
+       one decides how every row is labelled. Neither can fail the boot: with no
+       clock the dates read as UTC, and with no appkey nothing is marked read. */
+    clock_load();
     hwm_load();
 
     gm_range = 0;
