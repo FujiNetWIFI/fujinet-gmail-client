@@ -53,6 +53,20 @@ static void num2(char *dst, unsigned char v)
  * long and stay long: doe runs to 146096, and 365 * yoe to 145635. Truncating
  * either gives a date that is plausible, wrong, and wrong only some of the
  * time -- which is the worst kind of wrong to go looking for.
+ *
+ * mp is an int for a related reason, and it is not a style choice. C promotes
+ * both operands of `153 * mp` to int before multiplying, so the 765 it can
+ * reach is well inside the range -- but CMOC, on the CoCo, emits an 8-by-8 MUL
+ * and keeps only the low byte whenever *both* operands happen to fit in one.
+ * 765 came back as 253, and the day of the month came out two days late in a
+ * way num2()'s own `% 10` then hid: 131 renders as "31". Widening mp puts one
+ * operand out of byte range and the multiply back into sixteen bits.
+ *
+ * Nothing else in the program is exposed to this. Every other multiply here
+ * has a long or an int operand already -- `5 * doy`, `365UL * yoe`,
+ * `row * stride` in wrap.c -- and the coco backend casts row to unsigned int
+ * before scaling it by SCR_COLS. Check any new one against the rule: if both
+ * sides fit in a byte and the product does not, it needs widening.
  */
 static void civil_from_days(unsigned long days, unsigned int *y,
                             unsigned char *mo, unsigned char *d)
@@ -61,7 +75,7 @@ static void civil_from_days(unsigned long days, unsigned int *y,
     unsigned long doe;          /* day of era,   0..146096 */
     unsigned int  yoe;          /* year of era,  0..399    */
     unsigned int  doy;          /* day of year, from March */
-    unsigned char mp;           /* month, March = 0        */
+    unsigned int  mp;           /* month, March = 0 -- int on purpose, above */
 
     days += 719468UL;
 
@@ -71,7 +85,7 @@ static void civil_from_days(unsigned long days, unsigned int *y,
     yoe = (unsigned int) ((doe - doe / 1460UL + doe / 36524UL
                                - doe / 146096UL) / 365UL);
     doy = (unsigned int) (doe - (365UL * yoe + yoe / 4 - yoe / 100));
-    mp  = (unsigned char) ((5 * doy + 2) / 153);
+    mp  = (5 * doy + 2) / 153;
 
     *d  = (unsigned char) (doy - (153 * mp + 2) / 5 + 1);
     *mo = (unsigned char) (mp < 10 ? mp + 3 : mp - 9);

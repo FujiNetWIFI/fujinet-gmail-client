@@ -15,9 +15,18 @@
 /* Sizing                                                              */
 /* ------------------------------------------------------------------ */
 
-/* Entries fetched per range. Each one costs the adapter an extra upstream
-   HTTPS round trip inside the open(), so this is deliberately modest. */
+/*
+ * Entries fetched per range. Each one costs the adapter an extra upstream HTTPS
+ * round trip inside the open(), so this is deliberately modest.
+ *
+ * It is also the inbox's list height, because no backend scrolls a window
+ * inside a page -- ui_inbox() paints gm_count rows and that is the whole list.
+ * A machine with fewer rows than this has to lower it rather than invent a
+ * second number: the CoCo's sixteen-row screen has eleven to spend.
+ */
+#ifndef IDX_MAX
 #define IDX_MAX         16
+#endif
 
 /*
  * Wrapped body rows kept before we give up and set the truncation flag, and
@@ -73,11 +82,20 @@
  * a static_assert(sizeof(MailIndexItem) == 220) as a tripwire against this
  * layout changing -- if a firmware update trips it, this struct is what moves.
  *
- * The wire is little-endian and so is the 6502, and cc65 inserts no struct
- * padding, so a record can be read straight into this.
+ * A record is read straight into this, which works because no compiler in this
+ * family inserts struct padding: cc65 has none to insert on a 6502, and CMOC
+ * none on a 6809.
+ *
+ * Every multi-byte number is bytes, not an integer, and that is not fussiness.
+ * The wire is little-endian and so is the 6502, so msgnum used to be a uint32_t
+ * -- and then the 6809 arrived, which is big-endian, and read every message
+ * number and the whole folder size backwards. Nothing on screen would have
+ * looked obviously wrong; the numbers go straight back out in a URL, so every
+ * open would simply have 404'd. rd32le() in net.c is now the only thing that
+ * knows the wire's byte order, the same way date.c is for ts[8].
  */
 struct wire_rec {
-    uint32_t msgnum;            /*   0    4  */
+    uint8_t  msgnum[4];         /*   0    4  little-endian u32 */
     char     name[32];          /*   4   32  NUL-terminated / NUL-padded */
     char     email[48];         /*  36   48  fallback when name[0] == 0 */
     char     subject[128];      /*  84  128  */
@@ -199,13 +217,10 @@ void          hwm_update(const uint8_t *ts);        /* advance + persist if newe
 /* Platform backend -- implemented per target under src/<platform>/     */
 /* ------------------------------------------------------------------ */
 
-/* Visible body rows in the message reader, and list rows in the inbox.
-   A platform with a different screen geometry overrides these. */
+/* Visible body rows in the message reader. The inbox's list height is IDX_MAX
+   -- see the comment there -- and does not get a constant of its own. */
 #ifndef MSG_ROWS
 #define MSG_ROWS    18
-#endif
-#ifndef LIST_ROWS
-#define LIST_ROWS   IDX_MAX
 #endif
 
 /* Portable key codes returned by plat_getkey(). */

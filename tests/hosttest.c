@@ -80,43 +80,56 @@ static void test_sanitize(void)
     eq_str("empty", b, "");
 }
 
+/*
+ * These cases name their widths as literals -- 40 and 10 -- so the buffer they
+ * wrap into has to be sized from the widest of those and not from BODY_STRIDE.
+ *
+ * It used to be BODY_STRIDE, which was 41 for the Atari and 79 for the Apple
+ * and therefore always wide enough by accident. The CoCo's is 33: wrapping to
+ * 40 columns then ran every row into the next, and two of these assertions
+ * failed with the *previous* row's tail glued onto them. The wrap itself was
+ * correct; the test had been writing out of bounds all along and had only ever
+ * been handed buffers big enough to hide it.
+ */
+#define WRAP_STRIDE 41
+
 static void test_wrap(void)
 {
-    char rows[8][BODY_STRIDE];
+    char rows[8][WRAP_STRIDE];
     unsigned int n;
 
     puts("wrap");
 
-    n = wrap_text("", rows[0], 8, 40, BODY_STRIDE);
+    n = wrap_text("", rows[0], 8, 40, WRAP_STRIDE);
     eq_int("empty yields one blank row", n, 1);
     eq_str("blank row", rows[0], "");
 
-    n = wrap_text("short line", rows[0], 8, 40, BODY_STRIDE);
+    n = wrap_text("short line", rows[0], 8, 40, WRAP_STRIDE);
     eq_int("one row", n, 1);
     eq_str("one row text", rows[0], "short line");
 
     /* Greedy whole-word wrap: the break lands between words, never inside. */
     n = wrap_text("aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii",
-                  rows[0], 8, 40, BODY_STRIDE);
+                  rows[0], 8, 40, WRAP_STRIDE);
     eq_int("two rows", n, 2);
     eq_str("row 0", rows[0], "aaaa bbbb cccc dddd eeee ffff gggg hhhh");
     eq_str("row 1", rows[1], "iiii");
 
     /* A word longer than the whole row has nowhere to break, so it is split. */
     n = wrap_text("x 012345678901234567890123456789012345678901234567890",
-                  rows[0], 8, 40, BODY_STRIDE);
+                  rows[0], 8, 40, WRAP_STRIDE);
     eq_int("hard split rows", n, 2);
     eq_str("hard split 0", rows[0], "x 01234567890123456789012345678901234567");
     eq_str("hard split 1", rows[1], "8901234567890");
 
     /* Running out of row budget ellipsizes rather than dropping the tail
        silently. */
-    n = wrap_text("aaaa bbbb cccc dddd", rows[0], 1, 10, BODY_STRIDE);
+    n = wrap_text("aaaa bbbb cccc dddd", rows[0], 1, 10, WRAP_STRIDE);
     eq_int("budget rows", n, 1);
     eq_str("ellipsis", rows[0], "aaaa bb...");
 
     /* Exactly-full row: no spurious empty row after it. */
-    n = wrap_text("0123456789", rows[0], 8, 10, BODY_STRIDE);
+    n = wrap_text("0123456789", rows[0], 8, 10, WRAP_STRIDE);
     eq_int("exact fit", n, 1);
     eq_str("exact fit text", rows[0], "0123456789");
 }
@@ -239,23 +252,36 @@ static void test_body(void)
  */
 static void test_body_width(void)
 {
-    char big[BODY_COLS * 8];
-    unsigned int want, i;
+    char big[BODY_COLS * 8 + LINE_CAP + 1];
+    unsigned int want, ntok, i;
 
     puts("body ingest at BODY_COLS");
 
-    /* A paragraph of five-character tokens, long enough to wrap several times.
-       "aaaa " packs exactly (BODY_COLS + 1) / 5 tokens per row: the trailing
-       space of the last token on a row is the break, so a row holds as many
-       whole tokens as fit in BODY_COLS + 1 columns. */
+    /*
+     * A paragraph of five-character tokens, long enough to wrap several times.
+     * "aaaa " packs exactly (BODY_COLS + 1) / 5 tokens per row: the trailing
+     * space of the last token on a row is the break, so a row holds as many
+     * whole tokens as fit in BODY_COLS + 1 columns.
+     *
+     * The token count comes off LINE_CAP because this is a test of the *wrap*,
+     * and a paragraph longer than the line accumulator is no longer one line by
+     * the time the wrapper sees it -- flush_overflow() has already broken it at
+     * a space and carried the tail into the next row, which adds a row the
+     * model here does not predict. It used to be a flat 40 tokens, which is 200
+     * characters and happened to fit both of the LINE_CAPs that existed; the
+     * CoCo's is 128 and the assertion started counting an accumulator flush as
+     * a wrap. LINE_CAP characters exactly is safe -- the overflow check runs
+     * before the store, not after.
+     */
     body_reset();
+    ntok = LINE_CAP / 5;
     big[0] = '\0';
-    for (i = 0; i < 40; i++)
+    for (i = 0; i < ntok; i++)
         strcat(big, "aaaa ");
     ingest_str(big);
     body_finish();
 
-    want = (40 + (BODY_COLS + 1) / 5 - 1) / ((BODY_COLS + 1) / 5);
+    want = (ntok + (BODY_COLS + 1) / 5 - 1) / ((BODY_COLS + 1) / 5);
     eq_int("token rows scale with width", gm_body_rows, want);
     rows_fit("token paragraph");
 

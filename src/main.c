@@ -60,7 +60,7 @@ static void read_message(void)
 
     for (;;) {
         k = plat_getkey();
-        maxtop = (gm_body_rows > MSG_ROWS) ? (gm_body_rows - MSG_ROWS) : 0;
+        maxtop = (gm_body_rows > MSG_ROWS) ? (gm_body_rows - MSG_ROWS) : 0U;
 
         switch (k) {
         case K_UP:
@@ -79,7 +79,7 @@ static void read_message(void)
 
         case K_LEFT:
             if (msg_top) {
-                msg_top = (msg_top > MSG_ROWS) ? (msg_top - MSG_ROWS) : 0;
+                msg_top = (msg_top > MSG_ROWS) ? (msg_top - MSG_ROWS) : 0U;
                 ui_message(msg_top);
             }
             break;

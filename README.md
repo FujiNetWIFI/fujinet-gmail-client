@@ -8,7 +8,8 @@ Two implementations live here:
 - `intv/` — the original, in IntyBASIC for the Intellivision.
 - `src/` — the C port. `src/` is portable across MekkoGX platforms; each target
   supplies a backend under `src/<platform>/`. **Atari 8-bit** and **Apple //e
-  (enhanced)** are both done, in cc65.
+  (enhanced)** are done in cc65, **Tandy Color Computer** in CMOC, and
+  **Coleco Adam** in z88dk.
 
 The Apple II target is `apple2enh`. `apple2` is not a build of this: it is the
 unenhanced machine, with no MouseText and a character generator that would
@@ -41,6 +42,19 @@ Forty columns:
  RET:READ  <>:PAGE  R:REFRESH  ESC:QUIT
 ```
 
+Thirty-two, where the mark is drawn in semigraphics and the unread column is a
+real coloured chip rather than a character:
+
+```
+ ▞▚  GMAIL              INBOX      <- the Gmail M, in SG4
+ ▚▞  AUG 29 09:32    1-11/137
+ ■ ALICE KIM    RE: LUNCH TOMORRO  <- ■ = solid Gmail red, unread
+ ■ BOB CHEN     INVOICE #22 IS AT
+   CAROL DIAZ   STANDUP NOTES
+ ALICE KIM: RE: LUNCH TOMORROW     <- the selection, spelled out
+ ENT:READ <>:PAGE R:REFR Q:QUIT
+```
+
 Eighty, where the date becomes a column of its own:
 
 ```
@@ -53,6 +67,21 @@ Eighty, where the date becomes a column of its own:
   Re: lunch tomorrow and the thing after it
   from Alice Kim
  RET⏎:READ   ↑↓:MOVE   ◀▶:PAGE   R:REFRESH   ESC:QUIT
+```
+
+Thirty-two again on the Adam, but with five more rows and no hint bar, because
+the SmartKeys carry that:
+
+```
+ M  Gmail                  Inbox   <- white envelope on a red app bar
+ Aug 30 09:32       1-16/137       <- a gray rule row
+ # Alice Kim    Re: lunch tomorr   <- # = solid Gmail red, unread
+ # Bob Chen     Invoice #22 is a
+   Carol Diaz   Standup notes
+   ... sixteen rows, the Atari's page size at the CoCo's width
+ Alice Kim: Re: lunch tomorrow     <- the selection, spelled out
+ and the thing after it
+ [Read][Prev Pg][Next Pg][Refresh][ ][Quit]   <- the SmartKeys band
 ```
 
 **Message reader** — sender and date, subject wrapped to two lines, then the
@@ -78,6 +107,18 @@ The Atari's cursor keys need `Ctrl` held, which is a lot to ask while browsing a
 mailbox, so the bare keycaps those arrows live on — `-` `=` `+` `*` — work too.
 An enhanced //e has real arrow keys and needs no such workaround.
 
+The Adam has all of these on the keyboard, and the six SmartKeys above it in
+parallel: `Read` `Prev Pg` `Next Pg` `Refresh` and `Quit` on the inbox,
+`Pg Up` `Pg Dn` `Up` `Down` and `Back` in the reader. A SmartKey is
+discoverable and a keystroke is fast, and there is no reason to make anyone
+choose. `UNDO` joins `ESC` as back, and `CLEAR` joins `R` as refresh.
+
+A CoCo has no `ESC` key, so **`BREAK`** backs out of the reader — what every
+FujiNet CoCo client does — and **`Q`** quits, rather than one key doing both.
+That is an improvement rather than a concession: the key that leaves the program
+is never one keystroke away from the key that leaves a message. `CLEAR` joins
+`R` as refresh, mirroring the Atari's use of its own `CLEAR`.
+
 ---
 
 ## Building
@@ -92,7 +133,39 @@ make atari              # also builds a bootable .atr
 
 make apple2enh/product  # -> r2r/apple2enh/gmail.a2s   (AppleSingle)
 make apple2enh          # also builds a bootable ProDOS gmail.po
+
+make coco               # -> r2r/coco/gmail.bin and gmail.dsk
+
+defoogi make adam FUJINET_LIB=   # -> r2r/adam/gmail.ddp
 ```
+
+The CoCo build needs `cmoc` and `decb` (from
+[toolshed](https://github.com/nitros9project/toolshed)) rather than cc65. Its
+disk holds `GMAIL.BIN` and nothing else; start it with
+
+```
+LOADM"GMAIL":EXEC
+```
+
+There is deliberately no `AUTOEXEC.BAS` to do that for you — neither way of
+putting one on the disk survives contact with Disk BASIC, and the Makefile says
+why at length.
+
+The Adam build is the one that cannot run on the host, and the only one whose
+command line differs. It needs `zcc` from [z88dk](https://z88dk.org/) with
+[eoslib](https://github.com/tschak909/eoslib) and
+[smartkeyslib](https://github.com/tschak909/smartkeyslib) installed into it,
+which is what the `defoogi` container already carries — and because defoogi
+mounts the project directory and nothing else, the absolute `FUJINET_LIB` above
+does not exist inside it. `FUJINET_LIB=` blanks it for that one build, so
+`fnlib.py` downloads the archive into the project's own `_cache/` instead; the
+other three platforms keep the local checkout and keep building on the host.
+
+`-create-app` hands the link to z88dk's `appmake`, which emits a 256 KB digital
+data pack: a 1 KB boot block followed by 255 KB of payload, of which the boot
+block loads as many 1 KB blocks as the linked image needs into `$0000` and jumps
+there. `gmail_BOOTSTRAP.bin` is written alongside it and is *already* the first
+kilobyte of the `.ddp` — nothing needs to be done with it.
 
 `make apple2enh` needs `ac` and `acx` from
 [AppleCommander](https://github.com/AppleCommander/AppleCommander/releases/); it
@@ -117,9 +190,46 @@ cd /path/to/fujinet-pc-atari/build/dist && ./run-fujinet &
 atari800 -nobasic -netsio -run r2r/atari/gmail.com
 ```
 
+On the CoCo the bus is DriveWire rather than SIO, so the far end is
+fujinet-pc-**coco** and the machine needs an HDB-DOS DriveWire ROM for the
+vector at `[$D93F]`:
+
+```sh
+cd /path/to/fujinet-pc-coco/build/dist && ./run-fujinet &
+xroar -machine coco2bus -cart-type rsdos -cart-rom hdbdosdw3cc2 -becker \
+      -load-fd0 r2r/coco/gmail.dsk
+```
+
+xroar's Becker port and fujinet-pc's BoIP port both default to 65504, so the two
+find each other with no configuration.
+
+On the Adam the bus is AdamNet, the far end is fujinet-pc-**adam**, and the
+direction of the connection is the other way round from both of the above:
+ADAMEm *listens* and fujinet-pc connects in, so ADAMEm goes up first.
+
+```sh
+cd /path/to/fujinet-pc-adam/build/dist && ./run-fujinet &
+adamem -fujinet -tapea r2r/adam/gmail.ddp
+```
+
+Both default to port 65216 and find each other with no configuration. Note that
+the ADAM boots disk before tape, so with fujinet-pc serving its own CONFIG on
+disk slot 1 that is what comes up; to boot the client instead, mount
+`gmail.ddp` in slot 1 from CONFIG, or drop it in as fujinet-pc's
+`data/autorun.ddp`.
+
+**Device `0x03` has to be forwarded.** The client reads the clock from the
+AdamNet clock device, and ADAMEm's default `an_forward_mask` covers the printer,
+the disks, the network units and the Fuji gateway but not the clock. Without
+`(1UL << 0x03)` in it the read fails, `src/clock.c` gives up, and every message
+is labelled in UTC — quietly, because that is exactly what a machine with no
+clock is supposed to do.
+
 Gmail needs a Google grant with the `gmail.readonly` scope, authorized through
-the FujiNet Web UI. Only run one fujinet-pc instance — two of them fight over
-the NetSIO port and one will exit mid-session.
+the FujiNet Web UI — and it is per fujinet-pc instance, so a grant authorized
+against the Atari build's config is not visible to the CoCo build's. Only run
+one instance per bus: two of them fight over the port and one will exit
+mid-session.
 
 ## Testing
 
@@ -132,16 +242,39 @@ they run natively instead of through a cross-compile and an emulator:
 make -C tests
 ```
 
-Built twice, because the core's fixed widths are overridable and both backends
-override them: `hosttest` is the Atari's shape and `hosttest80` the Apple II's.
-That is the only way the width-dependent paths get covered at a width the Atari
-never reaches, and the assertion that earns the second binary is the one that
-checks no produced row is wider than `BODY_COLS` — a `BODY_STRIDE` mismatch or
-an off-by-one in the hard split lands there and nowhere else.
+Built four times, because the core's fixed widths are overridable and every
+backend overrides them: `hosttest` is the Atari's shape, `hosttest80` the Apple
+II's, `hosttest32` the CoCo's and `hosttestadam` the Adam's. That is the only
+way the width-dependent paths get covered at widths the Atari never reaches in
+either direction, and the assertion that earns the extra binaries is the one
+that checks no produced row is wider than `BODY_COLS` — a `BODY_STRIDE`
+mismatch or an off-by-one in the hard split lands there and nowhere else.
+
+The fourth is not a duplicate of the third, though both are 32 columns wide. The
+CoCo pays for its narrow screen by dropping `IDX_MAX` to 11 and `GM_RXBUF` to
+256; the Adam has five more rows and keeps both defaults. So `hosttestadam` is
+the only shape where the widest index meets the narrowest wrap, and the only one
+whose row budget is 320.
+
+Adding the third shape found two latent bugs in this file rather than in the
+program, both of the same kind: a test that named a width as a literal but sized
+something from a `BODY_*` macro, and so had only ever been correct by accident.
+`test_wrap()` wrapped to 40 columns into rows of `BODY_STRIDE`, which was 41 and
+79 and is now also 33 — it had been writing out of bounds all along and had
+never been handed a buffer small enough to notice. And the token-paragraph
+assertion ingested a flat 200 characters as one line, which is fine while every
+`LINE_CAP` is at least 200 and counts an accumulator flush as a wrap when it is
+not. Both now derive their sizes from what they actually depend on.
 
 The date tests are worth their space for one reason: 2100 is not a leap year,
 and the full Gregorian rule is the only thing that makes `civil_from_days` get
 it right. The two assertions a day either side of 2100-03-01 are what hold it.
+
+What none of this can catch is a code generator getting the arithmetic wrong.
+The CoCo's day of the month came out two days late while all 61 assertions
+passed, because the fault was in CMOC's 8-bit multiply and not in this source —
+see the note on `mp` in `src/date.c`. It was found by photographing the running
+screen, which is what the capture tools below are for.
 
 **Headless screen capture** builds, runs the client with no display, and decodes
 the text screen out of the machine's memory. The Atari one breaks where the
@@ -177,6 +310,71 @@ driving `applen` are easy to get wrong and all three are documented in
 `tools/apple2-run.py`: `--state-filename` is ignored unless the file already
 exists, `--headless` never creates the window that F11 is read through, and
 `set_escdelay(0)` means the F11 sequence has to arrive in one write.
+
+`tools/coco-shot.sh` is the third, same arguments again:
+
+```sh
+tools/coco-shot.sh                          # canned data, first screen
+tools/coco-shot.sh "K_ENTER"                # scripted keys, canned data
+REAL=1 TMO=300 tools/coco-shot.sh           # against fujinet-pc-coco
+```
+
+It drives [xroar](https://www.6809.org.uk/xroar/) with no display and reads the
+512 bytes of the 32×16 page at `$0400` out of the running machine over xroar's
+GDB target. That is the *entire* visual state of this backend, so `coco-decode.py`
+can print four panes from it — text, inverse video, semigraphics colour, and the
+screen expanded to 64×32 with every semigraphics cell broken into its four
+quadrants. That last pane is drawn in exactly the form `src/coco/logo.c` comments
+its byte tables in, so a capture of the mark can be compared against the source
+picture character for character.
+
+Three things about driving it are easy to get wrong, and all three are in the
+script's comments: `-type` must use `\r`, because `\n` maps to the CoCo's DOWN
+ARROW and types the command without entering it; xroar's `-timeout` counts
+*emulated* seconds, so pairing it with `-no-ratelimit` fires it before the
+machine finishes booting, and the real guard is the socket timeout in
+`coco-rsp.py`; and `Z0` breakpoints are accepted, answer `OK` and never fire, so
+`coco-rsp.py` interrupts and samples the PC in a loop instead.
+
+`tools/adam-shot.sh` is the fourth, and the one that cannot work the way the
+other three do. ADAMEm has no monitor and no GDB stub, so there is nothing to
+break in. What it has instead is a snapshot format carrying all 16K of VRAM and
+an `-autosnap` mode that writes one at shutdown, so the recipe is to run the
+machine blind under SDL's dummy drivers, stop it after a fixed wall-clock time,
+and decode the screen out of the state it left behind:
+
+```sh
+tools/adam-shot.sh                          # canned data, first screen
+tools/adam-shot.sh "K_DOWN,K_ENTER"         # scripted keys, canned data
+REAL=1 WAIT=90 tools/adam-shot.sh           # against fujinet-pc-adam
+```
+
+The capture is therefore timing-based rather than event-based, which is the one
+respect in which this harness is weaker than the other three; `WAIT` is generous
+by default for that reason.
+
+`tools/adam-decode.py` renders the result as a PNG, because on this machine a
+picture is the honest output — the screen is a bitmap and the parts of the
+client that only exist here are not checkable from glyphs. Two text panes come
+with it: the background ink of every cell, which is what shows the app bar, the
+rule row, the selection bar and the unread chips without needing to recognise a
+character; and the sprite attribute table with a **per-scanline count**.
+
+That second pane is the one worth reading. Four sprites is the hardware's limit
+and this mark sits exactly on it, so anything that adds a fifth to those
+scanlines silently costs the mark a stroke — and it is invisible in a screenshot
+precisely because the emulator, unlike the hardware, draws all of them.
+
+The snapshot carries all of RAM as well as all of VRAM, which makes it a
+debugger of last resort: an address out of `r2r/adam/gmail.map` reads straight
+out of the file at offset `2434 + 16384`. That is how the clock was confirmed to
+be parsing — `_iso` held `2026-08-30T14:55:56+0000` and `_gm_year` held 2026 —
+on a screen that had no date on it to look at.
+
+That sampling is the only reason this backend has a frame wait at all. It has no
+wall clock and no alarms, but a sampled PC has to land somewhere with a name on
+it, so `plat_key_block()` polls `inkey()` around a tight `plat_vsync()` spin
+rather than blocking in the BASIC ROM's keyboard scan.
 
 `-DGM_FAKE_DATA` replaces both fetches with generators that deliberately hit
 the awkward cases — an empty display name, fields straddling every column
@@ -329,11 +527,300 @@ $B700-$BEFF   C stack, __STACKSIZE__ = 2048
 $BF00         __HIMEM__ -- the ProDOS global page
 ```
 
+---
+
+## CoCo implementation notes
+
+**Semigraphics is per byte, so this is the one backend that draws the mark.**
+The 6847 decides from bit 7 whether a cell is a character or a 2×2 block of
+colour, with no mode switch and no second display list: `$00-$3F` is a glyph
+with INV asserted, `$40-$7F` the same glyph normal, `$80-$FF` a colour and a
+quadrant mask. Gmail's four brand colours land on four of the eight the VDG has
+and the envelope lands on buff, so the mark is a white envelope with four
+coloured strokes on it — as ordinary bytes in screen RAM. The Atari needs four
+players steered by an interrupt to get the same colours up; the Apple, at one
+bit per pixel, can only make the envelope an inverse block and leave the strokes
+as holes in it.
+
+**Every colour boundary falls on a cell edge.** All four quadrants of a cell
+share one colour, so the strokes are a whole cell — 8 pixels — wide and step in
+whole cells. A partial quadrant mask would not soften that, it would make it
+worse: the unlit quadrants of a red cell are *black*, not envelope. So every
+cell of the mark is `Q_ALL` and the diagonal is a clean staircase rather than a
+ragged one.
+
+**A solid green cell is invisible, and green is one of the four.** An unlit SG4
+quadrant is black and the text background is green, so the mark needs black
+wherever it would otherwise meet the background — a gutter cell to the right of
+the header mark, and a full one-cell frame around the large one, which also
+gives it an edge on the flat screens where it is the only thing on the top half
+of the display. The one place this cannot be fixed is the header mark's *bottom*
+edge, which meets the first list row; three sides bounded is enough to read.
+
+**The unread column is a real coloured chip.** The Atari's marker is an asterisk
+because a 40-column row has no spare column, and the Apple's is a MouseText
+diamond; here it is a solid Gmail-red cell for unread and black for read. It
+also has to stay outside the selection bar, because inverse video is XOR `$40`
+and on a byte `≥ $80` bit 6 is part of the colour field — an inverted red chip
+comes out cyan rather than highlighted. The Atari keeps its column 0 out because
+an inverse space is COLPF1 and covers the player, the Apple because MouseText
+has no inverse form. Three machines, three unrelated reasons, one rule.
+
+**The blank byte is `$60`, and there is no lowercase.** `memset(scr, 0, ...)`
+paints a screen of inverse `@`. And the ROM has sixty-four glyphs, uppercase
+only, so `sc()` folds case and every literal in `src/coco/` is written in
+capitals. Two of those sixty-four are worth knowing: `$5E` (`^`) is an up arrow
+and `$5F` (`_`) a left arrow, which is why the reader's scroll hint is `^V:LINE`
+— there is no down arrow to pair with the up one.
+
+**The page size is the list height.** No backend scrolls a window inside a page:
+`ui_inbox()` paints `gm_count` rows and that is the list. Sixteen rows pay for a
+two-row header, eleven list rows, a two-row panel and a footer, so `IDX_MAX`
+comes down to 11 and `?range=` asks the adapter for eleven. `LIST_ROWS` used to
+sit in `gmail.h` as a second name for the same number and was referenced by
+nothing at all; it is gone rather than left to drift.
+
+**The panel earns more here than anywhere.** From truncates at twelve columns
+and Subject at seventeen, so the two rows under the list — sixty-four cells of
+`name: subject` through the shared `wrap_text()` — are what make a row readable.
+The Atari has the same panel with thirty columns of list to fall back on.
+
+**CMOC computes `a * b` in eight bits when both operands fit in a byte.** This
+is not what C says: both promote to `int` first. `153 * mp` in `civil_from_days`
+reached 765, came back as 253, and put the day of the month two days late — in a
+way `num2()`'s own `% 10` then hid, because 131 renders as "31". Every host
+assertion passed. Widening `mp` to `int` puts one operand out of byte range and
+the multiply back into sixteen bits. The rule to check any new arithmetic
+against: **if both sides fit in a byte and the product does not, it needs
+widening.** Nothing else in the tree was exposed — `5 * doy`, `365UL * yoe` and
+`wrap.c`'s `row * stride` all have a wider operand already, and this backend
+casts `row` to `unsigned int` before scaling it by `SCR_COLS`.
+
+**The 6809 is big-endian, which found a real bug in shared code.**
+`struct wire_rec` was read straight off the wire with `uint32_t msgnum`, and the
+comment in `gmail.h` blessed it because "the wire is little-endian and so is the
+6502". Every message number and the whole folder size came back byte-swapped
+here. The numbers go straight back out in a URL, so nothing would have *looked*
+wrong — every open would simply have 404'd. The field is now `uint8_t[4]` and
+`rd32le()` in `net.c` is the only thing that knows the wire's byte order, the
+same way `date.c` already was for the eight-byte timestamp. Two little-endian
+backends had been running on that assumption for the whole life of the program.
+
+**CMOC ships no `<string.h>`, `<stdlib.h>` or `<stdint.h>`.** Everything is in
+`<cmoc.h>`, which it includes for every translation unit anyway, so
+`src/coco/include/` holds three shims and the portable half goes on including
+them the way ordinary C89 does. The `<stdint.h>` one must *defer* to `<coco.h>`
+rather than define the types itself: spelled as typedefs it collides with
+`coco.h`'s, and spelled as `#define`s it turns `coco.h`'s own block into
+`typedef unsigned char unsigned char;` for any file that reaches the shim first.
+
+**`clock_get_time()` exists on this bus, and `clock_get_tz()` does not.**
+fujinet-lib declares the latter for every platform and builds it for some; the
+CoCo archive holds `fn_clock/clock_get_time.o` and nothing else. This client only
+ever wanted `TZ_ISO_STRING`, whose trailing `+HHMM` *is* the resolved offset, so
+it needs no flag for that — where the sibling calendar client, which wanted the
+POSIX rule for its settings screen, needed `GC_NO_CLOCK_TZ`.
+
+**The program is linked at `$1000`, not `$0E00`.** With Disk BASIC present a
+BASIC program lives at `$0E00`, so `LOADM` into `$0E00` destroys the line that is
+running it. fujinet-news and fujinet-config pay for that address with a
+second-stage loader that pokes BASIC's direct-mode buffer and jumps into RUNM;
+that trick is ROM-sensitive and gives `?UL ERROR` on stock Disk BASIC 1.1.
+Giving BASIC 512 bytes is a cheaper price. `--limit` is what turns "silently
+corrupts the stack" into a build failure, and `plat_shutdown()` cold-starts
+rather than returning, because there is nothing left to return to.
+
+**Memory** (`r2r/coco/gmail.map`, `Section: program_end`):
+
+```
+$1000-$3FA8   program: code, rodata, data           (12,201 bytes)
+$3FA9-$6E6F   bss, of which gm_body is 9,504        (11,975 bytes)
+$6E70         program_end                    (3,472 bytes spare)
+$7C00         --limit -- exceeding it is a link error, not a mystery
+$7F00         --initial-s, the C stack growing down
+```
+
+The build that bounds `BODY_ROWS` is not the shipped one. A `-DGM_FAKE_DATA`
+build links the canned wire data *alongside* the real transport and ends about
+1.8K higher, so it is the one that runs out first — at 320 rows it had 641 bytes
+left, which would have meant the next string added to a screen breaking
+`tools/coco-shot.sh` while the product still fitted. Check both.
+
 `gm_body` is 18,960 of that BSS. `BODY_ROWS` comes *down* from the Atari's 300
 even though the buffer grows, because at 78 columns a message needs about half
 the rows: 240 × 78 holds 18,720 characters against the Atari's 12,000. Check the
 map before raising it, and mind that `__STACKSIZE__` trades directly against
 BSS.
+
+---
+
+## Adam implementation notes
+
+**This is the first backend that does not have to approximate the brand.**
+GRAPHICS II is a 256x192 bitmap whose foreground and background are settable per
+8x1 strip out of fifteen inks, and z88dk lays the name table out linearly so all
+768 cells own their own eight pattern bytes and their own eight colour bytes. So
+the app bar is a real red band, the unread column is a real red chip, and the
+selection bar is a real gray highlight. The Atari has one background and one
+text luminance per band, the CoCo has eight semigraphics colours and no text
+colour at all, and the Apple has none.
+
+Medium red is `#D56F5D` against Gmail's `#EA4335`. Dark red is too brown and
+light red is pink, so the middle of the three is both the closest hue and the
+only one white text reads against.
+
+**The SmartKeys pay for a row, and the row buys back the Atari's page size.**
+Rows 21-23 belong to smartkeyslib, which leaves twenty-one — but every other
+backend spends its bottom row on a hint bar, because it has nowhere else to say
+what the keys do. This machine has six labelled keys with their captions drawn
+on the screen, so that row was never spent. Sixteen list rows fit, which is the
+portable `IDX_MAX` and the Atari's number, on a screen eight columns narrower;
+the CoCo has to come down to eleven.
+
+`MSG_ROWS` is the one width that does come down, by exactly one. The reader
+spends a row on the rule between the subject and the body, which is where the
+page indicator lives now that there is no footer to put it in.
+
+**The mark is four hardware sprites, and four is the ceiling.** A TMS9918A shows
+at most four sprites on any scanline and silently drops the fifth, and a sprite
+occupies every line its 16-pixel box covers whether or not its colour is
+transparent. The four strokes of the "M" — a blue pillar, a red diagonal
+descending right, a yellow diagonal descending left to meet it, and a green
+pillar, which is the assignment `intv/gfx.bas` established and every backend
+since has kept — are stacked on one spot, so they cover the same sixteen lines
+and sit exactly on the limit.
+
+Because they do, **the mark can never be wider than one sprite.** Stacking is
+what makes it multicolour and stacking is what caps its width, so the white
+envelope around the strokes is painted into the attribute plane rather than
+drawn in a fifth sprite. That costs no sprite and no scanline, and it is the
+same picture the CoCo draws in semigraphics bytes.
+
+The two sizes are one pattern set. `logo_small()` runs the sprites unmagnified
+at 16x16 — two cells square, which is what lets the app bar carry the mark
+without spending a row on it — and `logo_large()` sets the VDP's global MAG bit
+and gets 32x32 out of the same thirty-two bytes per stroke. The bit is global,
+but the two are never on screen together: the flat screens have no app bar and
+the app bar has no flat screen.
+
+Which makes ending the sprite list load-bearing. `vdp_set_mode(2)` clears VRAM,
+so slots 4 to 31 read `y=0` and sit across scanlines 1 to 16; unterminated,
+twenty-eight invisible sprites push the mark off its own budget and it loses
+whichever stroke the hardware gets to last. `logo_init()` writes `y=208` into
+slot 4 once, and `logo_hide()` writes it into slot 0. `scr_clear()` does not
+touch sprites — they live outside the character planes — so `ui_message()` has
+to hide the mark explicitly or the large one from `ui_busy()` sits over the
+letter.
+
+**fujinet-lib has no clock for this bus at all.** Not `clock_get_time`, which
+the CoCo does have, and not `clock_get_tz`, which it does not — `adam/src/` has
+`fn_network/` and `fn_fuji/` and no `fn_clock/`.
+
+The firmware does answer it. `lib/device/adamnet/adamClock.cpp` registers
+`platformClock` at `FUJI_DEVICEID::CLOCK`, which on AdamNet is device `0x03`,
+and `fujiClock` dispatches `APETIME_GET_ISO_LOCAL` (`0x49`, `'I'`) to
+`send_string(get_current_time_iso(...))` — which appends a NUL, so what comes
+back is `YYYY-MM-DDTHH:MM:SS+HHMM\0`, resolved through the FujiNet's
+`[General]` timezone. That is exactly the buffer `src/clock.c` already parses,
+so `src/adam/clock_adam.c` is a twenty-five byte read and the portable half
+needs no `#ifdef`.
+
+The sibling calendar client asks the *Fuji* device for `FUJI_GET_TIME` (`0xD2`)
+instead, because `SIMPLE_BINARY` is all its `src/clock.c` wants. That form is
+local wall-clock with no offset in it, which is no use here: this client needs
+the trailing `+HHMM` to turn the wire's UTC epoch seconds into a date column,
+and there is nothing to difference it against.
+
+**fujinet-lib's Adam `fuji_*` calls return their booleans inverted, and this one
+is on the critical path.** Thirty-seven of the `bool`-returning entry points in
+`adam/src/fn_fuji/` return `fujiError_t` codes — so `FN_ERR_OK`, which is zero,
+comes back as `false` and `FN_ERR_IO_ERROR` as `true`. The backend was written
+to the `uint8_t` convention the `network_*` half uses and then declared with the
+`fuji_*` half's.
+
+`main.c`'s `have_fujinet()` probes with `fuji_get_adapter_config_extended()`
+precisely because it is something only a real adapter can answer, so the symptom
+is a FujiNet that is present, answering, and logging `Fuji cmd: GET ADAPTER
+CONFIG EXTENDED` while the client insists it is not there.
+`src/adam/fuji_adam.c` defines a corrected version, which leaves the library
+member unreferenced so the linker never pulls it — the same trick
+`clock_adam.c` uses for a function the archive does not carry at all. Delete it
+once upstream returns real booleans. `fuji_read_appkey()`,
+`fuji_write_appkey()` and `fuji_set_appkey_details()`, which `src/hwm.c` needs,
+are among the correct ones.
+
+**With no FujiNet answering, the client sits on the splash screen.** It looks as
+though the cause is fujinet-lib wrapping each call in `while (1) { if (err ==
+ADAMNET_TIMEOUT) continue; }`, but that loop is unreachable. eoslib spins one
+level further down: `eos_write_character_device()` restarts itself internally
+until the device settles and only ever returns a settled status, so
+`ADAMNET_TIMEOUT` never reaches any caller on this bus. `ui_notfound()` is
+therefore unreachable without a presence check that does not go through
+`eos_write_character_device()` at all — which belongs in eoslib or fujinet-lib,
+not here. Every Adam FujiNet client shares this.
+
+**Colour and glyphs are written by different means, and every field repaints
+both.** Glyphs go through z88dk's console, which knows how to blit a font cell
+into eight pattern bytes anywhere; colour is `vdp_vfill` straight into the
+attribute plane, one call per run. The console keeps its own notion of the
+current colour and changes it whenever anything else prints — and
+`smartkeys_display()` sets it six times — so a field whose colour came from
+whatever `vdp_color()` was last called with is a field whose colour is a
+function of paint order. Repainting the run makes each field depend on its own
+arguments and nothing else.
+
+**Nothing paints below row 20.** `scr_clear()` clears twenty-one rows rather
+than calling `clrscr()`, which would take the SmartKeys legend with it and mean
+asking smartkeyslib to paint it again. `sk_bind()` likewise suppresses the
+repaint when the legend has not actually changed, which is what keeps a
+`smartkeys_display()` — it clears and redraws all three rows — off every
+`ui_inbox_sel()`.
+
+**SmartKey labels are not clipped.** The six slots are 48, 40, 40, 40, 40 and 48
+pixels wide, the font is proportional, and an overlong label is drawn straight
+over its neighbour's slot. Every label here has been measured against
+`smartkeys_font[]`; `Refresh` is the widest at 32 of its 40 pixels. Slot V is
+left NULL on every screen, which paints it as yellow status rather than a
+keycap and marks the two halves of the band — move and page on the left, act and
+leave on the right.
+
+**Column 0 stays out of the selection bar, for a fourth unrelated reason.** Here
+it is that the chip's attribute byte *is* Gmail red and the bar's is gray, so a
+chip inside the bar would stop being the brand colour. The Atari keeps its
+column 0 out because an inverse space is COLPF1 and covers the player, the Apple
+because MouseText has no inverse form, the CoCo because XOR `$40` on a
+semigraphics byte recolours it.
+
+**`plat_vsync()` is a `HALT`.** The VDP raises an NMI once per frame and z88dk's
+coleco crt installs a handler for it unconditionally, so a HALT wakes once per
+frame with no interrupt of our own to install and no multi-byte counter to read
+twice — which is what the calendar client needs only because its HAL exposes a
+tick count. It also keeps the key poll off the AdamNet bus between frames, which
+a bare spin on `eos_end_read_keyboard()` would not.
+
+**`plat_shutdown()` hands the machine back to SmartWriter.** This build is
+linked at `$0000` in all-RAM mode, so the boot block that loaded it is long
+gone and there is nothing to return to.
+
+**Memory** (`r2r/adam/gmail.map`):
+
+```
+$00AD-$472A   code                                   (18,045 bytes)
+$472A-$4E5A   rodata                                 ( 1,840 bytes)
+$4E5A-$58FA   data                                   ( 2,720 bytes)
+$58FA-$948C   bss, of which gm_body is 10,560        (15,250 bytes)
+    ...       13,172 bytes spare
+$C800-$C82B   the 43-byte boot block -- the ceiling
+$D390         the stack, growing down
+```
+
+Fifty-one kilobytes of address space against the CoCo's twenty-seven, which is
+why `LINE_CAP` and `GM_RXBUF` stay at the portable defaults and `BODY_ROWS` goes
+*up* to 320 rather than down. Check `__BSS_END_tail` against `$C800` before
+raising either, and check the `-DGM_FAKE_DATA` build too: it links the canned
+wire data alongside the real transport and ends 1,675 bytes higher, so it is the
+one that runs out first. At 320 rows the product build has 13,172 bytes spare
+and the capture harness 11,497.
 
 ---
 
@@ -353,9 +840,13 @@ Inherited from the adapter and the original, not accidents of the port:
   makes any of that visible — it is the same value the mark is compared against.
 - **Dates are UTC without a clock.** The offset comes from one
   `clock_get_time` at boot, so a FujiNet with no clock device registered, or an
-  unset `[General] timezone`, labels everything in UTC. Nothing else breaks.
+  unset `[General] timezone`, labels everything in UTC. Nothing else breaks. On
+  the Adam that call goes to AdamNet device `0x03` directly, because fujinet-lib
+  has no clock for this bus — under ADAMEm it needs `0x03` in the forwarding
+  mask, or the same thing happens for the same reason.
 - **Slow first paint.** A 16-entry listing is roughly nineteen sequential
   upstream HTTPS round trips inside a single open, and can take 30–60 seconds.
+  The CoCo asks for 11 at a time, because that is what its screen shows.
 - **No character set conversion.** Anything above plain ASCII becomes a single
   `?` per run; there is no RFC 2047 or UTF-8 decoding anywhere.
 - **HTML-only messages show raw markup** — the adapter falls back to
@@ -395,18 +886,35 @@ src/apple2enh/  Apple //e (enhanced) backend
   ui.c          every painter
   logo.c        the "M" in one bit
   input.c       key mapping and the blocking read
-tests/          host-native tests, built at both screen shapes
+src/coco/       Tandy Color Computer backend
+  platform.h    geometry, the SG4 macros, internal API
+  screen.c      the 32x16 blitter, plus plat_init/shutdown/net_begin/net_end
+  ui.c          every painter
+  logo.c        the "M" as semigraphics byte tables
+  input.c       key mapping, the frame wait and the blocking read
+  include/      <string.h>, <stdlib.h> and <stdint.h> shims for CMOC
+src/adam/       Coleco Adam backend
+  platform.h    geometry, the GRAPHICS II address macros, the palette
+  screen.c      the attribute-plane blitter, plus plat_init/shutdown/net_*
+  ui.c          every painter, and the three SmartKey legend sets
+  logo.c        the Gmail "M" as four hardware sprites
+  input.c       SmartKeys, key mapping, the frame wait and the blocking read
+  clock_adam.c  clock_get_time() -- fujinet-lib has none for this bus
+  fuji_adam.c   the adapter probe, whose library version inverts its bool
+tests/          host-native tests, built at all four screen shapes
 tools/          headless capture and decode, per platform
 intv/           the IntyBASIC original, built on its own
 mekkogx/        the cross-platform build template
 ```
 
-`SRC_DIRS = src src/%PLATFORM%` globs both backend directories, so adding a file
-is all that is needed to build it.
+`SRC_DIRS = src src/%PLATFORM%` globs each backend directory, so adding a file is
+all that is needed to build it. `src/coco/include/` holds no `.c` files, so the
+glob steps over it and it reaches the compiler only as an `-I`.
 
 Built on [MekkoGX](https://github.com/FozzTexx/MekkoGX), a cross-platform build
-template for retro machines: that glob is what picks up `src/atari/` and
-`src/apple2enh/` automatically, and `FUJINET_LIB` is what fetches and links
+template for retro machines: that glob is what picks up `src/atari/`,
+`src/apple2enh/`, `src/coco/` and `src/adam/` automatically, and `FUJINET_LIB` is what
+fetches and links
 fujinet-lib. `mekkogx/platforms/apple2enh.mk` is a copy of `apple2.mk` rather
 than an include of it, because `common.mk` derives `PLATFORM` from the file that
 included it.

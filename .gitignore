@@ -4,6 +4,8 @@
 /_cache/
 /release/
 
-# Host test binary
+# Host test binaries, one per screen shape
 /tests/hosttest
 /tests/hosttest80
+/tests/hosttest32
+/tests/hosttestadam

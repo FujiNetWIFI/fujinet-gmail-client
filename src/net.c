@@ -40,9 +40,16 @@ const char   *gm_stage = "";
 /* Scratch                                                             */
 /* ------------------------------------------------------------------ */
 
+/* The body read chunk. Every byte of it is BSS that the widest screen's row
+   buffer would rather have, so a tight machine lowers it -- gm_fetch_body()
+   loops until the channel is drained either way. */
+#ifndef GM_RXBUF
+#define GM_RXBUF    512
+#endif
+
 static char             url[64];
 static struct wire_rec  wire;
-static unsigned char    rxbuf[512];
+static unsigned char    rxbuf[GM_RXBUF];
 /* Last network_status() result. */
 static unsigned int     st_bw;
 static unsigned char    st_conn;
@@ -186,13 +193,28 @@ static void build_index_url(unsigned long range)
     strcat(url, num);
 }
 
+/*
+ * The wire's little-endian u32, assembled a byte at a time.
+ *
+ * This is the only place in the program that knows the wire's byte order for a
+ * number, and it exists because the 6809 does not share the 6502's. See the
+ * comment on struct wire_rec.
+ */
+static unsigned long rd32le(const uint8_t *p)
+{
+    return (unsigned long) p[0]
+         | ((unsigned long) p[1] << 8)
+         | ((unsigned long) p[2] << 16)
+         | ((unsigned long) p[3] << 24);
+}
+
 static void parse_rec(unsigned char slot)
 {
     struct entry *e = &gm_index[slot];
 
     /* The message number goes straight back out in a URL, so render it once
        and never touch it as a number again. */
-    ultoa(wire.msgnum, e->num, 10);
+    ultoa(rd32le(wire.msgnum), e->num, 10);
 
     /* displayName is preferred; the adapter leaves it empty when the header
        had no friendly name, and then the address is all we have. */
@@ -266,7 +288,7 @@ unsigned char gm_fetch_index(unsigned long range)
            from the oldest, so record 0 is the only place the folder size is
            available. */
         if (i == 0)
-            gm_total = wire.msgnum + range;
+            gm_total = rd32le(wire.msgnum) + range;
 
         parse_rec(i);
     }
@@ -440,7 +462,15 @@ static unsigned char fake_index(unsigned long range)
         s = (unsigned char) ((i + (unsigned char) range) & 7);
 
         memset(&wire, 0, sizeof(wire));
-        wire.msgnum = num;
+
+        /* Laid down as wire bytes, not assigned as a number, because that is
+           what a record off the wire is -- and on a big-endian target the two
+           are not the same thing. */
+        wire.msgnum[0] = (unsigned char) num;
+        wire.msgnum[1] = (unsigned char) (num >> 8);
+        wire.msgnum[2] = (unsigned char) (num >> 16);
+        wire.msgnum[3] = (unsigned char) (num >> 24);
+
         strcpy(wire.name, fake_name[s]);
         if (s == 6)
             wire.name[5] = 0x09;        /* a genuine wire control byte */
