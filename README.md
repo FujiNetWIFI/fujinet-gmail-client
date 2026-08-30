@@ -251,10 +251,10 @@ that checks no produced row is wider than `BODY_COLS` — a `BODY_STRIDE`
 mismatch or an off-by-one in the hard split lands there and nowhere else.
 
 The fourth is not a duplicate of the third, though both are 32 columns wide. The
-CoCo pays for its narrow screen by dropping `IDX_MAX` to 11 and `GM_RXBUF` to
-256; the Adam has five more rows and keeps both defaults. So `hosttestadam` is
-the only shape where the widest index meets the narrowest wrap, and the only one
-whose row budget is 320.
+CoCo pays for its narrow screen by dropping `IDX_MAX` to 11; the Adam has five
+more rows and keeps the portable 16. So `hosttestadam` is the only shape where
+the widest index meets the narrowest wrap, and the only one whose row budget is
+320.
 
 Adding the third shape found two latent bugs in this file rather than in the
 program, both of the same kind: a test that named a width as a literal but sized
@@ -798,6 +798,31 @@ twice — which is what the calendar client needs only because its HAL exposes a
 tick count. It also keeps the key poll off the AdamNet bus between frames, which
 a bare spin on `eos_end_read_keyboard()` would not.
 
+**A read on this bus is a whole packet, whatever you asked for.** Every other
+backend can say "give me 220 bytes" and get 220 bytes; AdamNet has no length in
+a channel read at all. The client sends RECEIVE and then CLR, and the device
+streams one packet -- `min(1024, bytes waiting)` -- decided entirely at its end.
+fujinet-lib's `network_read_adam()` then copies that whole packet into the
+caller's buffer, while the `network_read()` around it advances its cursor by
+what was *requested*. So a short read does two things at once: it writes past
+the end of the buffer, and it drops the surplus from the stream.
+
+The listing is 220-byte records, and reading one per call is what every other
+bus wants. Here that read consumed 1,024 bytes of the listing to use 220 of
+them, so record 0 was right, records 1 and 3 were slices taken from arbitrary
+offsets -- one of them landed exactly on record 13's timestamp and rendered it
+as a message number -- record 2 fell in NUL padding and came out blank, and the
+listing ended after four rows of a sixteen-row page. The overrun ran 804 bytes
+past a 220-byte struct, through `rxbuf`, `st_bw` and the panel's wrap buffers.
+
+`GM_PKT` in `src/net.c` is the fix and the documentation: set to 1,024 here and
+0 everywhere else, it makes the index stage whole packets in a buffer of
+`GM_PKT + REC_STRIDE` and slice records out, carrying the tail that straddles.
+`GM_RXBUF` rises to 1,024 for the same reason -- a body read has to take a whole
+packet too -- and `net.c` refuses to compile if it is smaller than `GM_PKT`.
+Where `GM_PKT` is 0 the staging buffer is one record and the tail is always
+empty, so the other three backends read exactly as they did before.
+
 **`plat_shutdown()` hands the machine back to SmartWriter.** This build is
 linked at `$0000` in all-RAM mode, so the boot block that loaded it is long
 gone and there is nothing to return to.
@@ -805,22 +830,23 @@ gone and there is nothing to return to.
 **Memory** (`r2r/adam/gmail.map`):
 
 ```
-$00AD-$472A   code                                   (18,045 bytes)
-$472A-$4E5A   rodata                                 ( 1,840 bytes)
-$4E5A-$58FA   data                                   ( 2,720 bytes)
-$58FA-$948C   bss, of which gm_body is 10,560        (15,250 bytes)
-    ...       13,172 bytes spare
+$00AD-$4803   code                                   (18,262 bytes)
+$4803-$4F33   rodata                                 ( 1,840 bytes)
+$4F33-$59D3   data                                   ( 2,720 bytes)
+$59D3-$9B65   bss, of which gm_body is 10,560        (16,786 bytes)
+    ...       11,419 bytes spare
 $C800-$C82B   the 43-byte boot block -- the ceiling
 $D390         the stack, growing down
 ```
 
 Fifty-one kilobytes of address space against the CoCo's twenty-seven, which is
-why `LINE_CAP` and `GM_RXBUF` stay at the portable defaults and `BODY_ROWS` goes
-*up* to 320 rather than down. Check `__BSS_END_tail` against `$C800` before
-raising either, and check the `-DGM_FAKE_DATA` build too: it links the canned
-wire data alongside the real transport and ends 1,675 bytes higher, so it is the
-one that runs out first. At 320 rows the product build has 13,172 bytes spare
-and the capture harness 11,497.
+why `LINE_CAP` stays at the portable default, `GM_RXBUF` goes *up* to 1,024 (see
+the packet note above) and `BODY_ROWS` goes up to 320 rather than down. Check
+`__BSS_END_tail` against `$C800` before raising any of them, and check the
+`-DGM_FAKE_DATA` build too: it links the canned wire data alongside the real
+transport and ends 1,681 bytes higher, so it is the one that runs out first. At
+320 rows the product build has 11,419 bytes spare and the capture harness
+9,738.
 
 ---
 

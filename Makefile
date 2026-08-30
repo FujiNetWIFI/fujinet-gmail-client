@@ -62,15 +62,25 @@ FUJINET_LIB = /home/thomc/Workspace/fujinet-lib/build
 # boot block at $C800, so 51K of address space against the CoCo's 27K. Check
 # __BSS_END_tail in r2r/adam/gmail.map against $C800 before raising it, and
 # check the -DGM_FAKE_DATA build too: it links the canned wire data alongside
-# the real transport, ends 1,675 bytes higher, and is the one that runs out
-# first. At 320 rows the product build has 13,172 bytes spare and the capture
-# harness 11,497.
+# the real transport, ends 1,681 bytes higher, and is the one that runs out
+# first. At 320 rows the product build has 11,419 bytes spare and the capture
+# harness 9,738.
 #
-# LINE_CAP and GM_RXBUF are left at the portable defaults, which no other
-# 32-column build can afford.
+# LINE_CAP is left at the portable default, which no other 32-column build can
+# afford.
+#
+# GM_PKT and GM_RXBUF are the one pair that is not a screen shape. AdamNet has
+# no length field in a channel read: the device streams a whole packet of up to
+# 1024 bytes whatever the client asked for, and fujinet-lib copies all of it
+# into the caller's buffer while advancing its cursor by the requested length
+# instead. A read for anything other than min(1024, bytes waiting) therefore
+# overruns the buffer and drops the surplus from the stream. GM_PKT tells
+# src/net.c to stage the listing in packets, and GM_RXBUF has to be at least as
+# large so a body read takes a whole one; net.c refuses to compile otherwise.
 CFLAGS_EXTRA_ADAM  = -DBUILD_ADAM -Os
 CFLAGS_EXTRA_ADAM += -DMSG_ROWS=17
 CFLAGS_EXTRA_ADAM += -DBODY_COLS=32 -DBODY_ROWS=320 -DENT_SUBJ_LEN=48
+CFLAGS_EXTRA_ADAM += -DGM_PKT=1024 -DGM_RXBUF=1024
 
 # tools/adam-shot.sh appends -DGM_FAKE_DATA / -DGM_FAKE_KEYS through here, for
 # the same reason the CoCo has COCO_SHOT_FLAGS: it cannot set CFLAGS_EXTRA_ADAM

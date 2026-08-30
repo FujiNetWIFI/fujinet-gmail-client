@@ -47,9 +47,48 @@ const char   *gm_stage = "";
 #define GM_RXBUF    512
 #endif
 
+/*
+ * The block the bus hands back in one read, or 0 where there is no such thing.
+ *
+ * SIO, SmartPort and DriveWire all deliver exactly the number of bytes the
+ * caller asked for, so a read can be any size and 0 says so.
+ *
+ * AdamNet has no length in a channel read at all. The client sends RECEIVE and
+ * then CLR, and the device streams a whole packet -- min(1024, bytes waiting)
+ * -- whatever the caller passed; fujinet-lib's network_read_adam() then copies
+ * that entire packet into the caller's buffer. So a short request on this bus
+ * does two things at once: it writes past the end of the buffer, and it loses
+ * the surplus from the stream, because fujinet-lib's network_read() advances
+ * its cursor by what was requested rather than by what arrived.
+ *
+ * Every read here therefore has to be for exactly min(GM_PKT, bytes waiting),
+ * which is why the listing is staged rather than read a record at a time.
+ */
+#ifndef GM_PKT
+#define GM_PKT      0
+#endif
+
+#if GM_PKT
+#if GM_RXBUF < GM_PKT
+#error "GM_RXBUF must hold a whole bus packet -- see GM_PKT"
+#endif
+#define IDX_READ    GM_PKT
+#define IDX_STAGE   (GM_PKT + REC_STRIDE)
+#else
+/* One record per read, so nothing ever straddles and the tail is always
+   empty -- the staging buffer is the record. */
+#define IDX_READ    REC_STRIDE
+#define IDX_STAGE   REC_STRIDE
+#endif
+
 static char             url[64];
-static struct wire_rec  wire;
+static unsigned char    stage[IDX_STAGE];
 static unsigned char    rxbuf[GM_RXBUF];
+
+/* The record at the head of the staging buffer. struct wire_rec is all byte
+   arrays, and no machine in this family has an alignment requirement. */
+#define REC             (*(struct wire_rec *) stage)
+
 /* Last network_status() result. */
 static unsigned int     st_bw;
 static unsigned char    st_conn;
@@ -214,16 +253,16 @@ static void parse_rec(unsigned char slot)
 
     /* The message number goes straight back out in a URL, so render it once
        and never touch it as a number again. */
-    ultoa(rd32le(wire.msgnum), e->num, 10);
+    ultoa(rd32le(REC.msgnum), e->num, 10);
 
     /* displayName is preferred; the adapter leaves it empty when the header
        had no friendly name, and then the address is all we have. */
     copy_san(e->name,
-             wire.name[0] ? wire.name : wire.email,
+             REC.name[0] ? REC.name : REC.email,
              ENT_NAME_LEN);
-    copy_san(e->subject, wire.subject, ENT_SUBJ_LEN);
+    copy_san(e->subject, REC.subject, ENT_SUBJ_LEN);
 
-    memcpy(e->ts, wire.ts, 8);
+    memcpy(e->ts, REC.ts, 8);
     e->unread = 0;
 }
 
@@ -241,6 +280,7 @@ unsigned char gm_fetch_index(unsigned long range)
 {
     unsigned char code;
     unsigned char i, n;
+    unsigned int  left, have, want, j;
     int           got;
 
     gm_count = 0;
@@ -277,20 +317,42 @@ unsigned char gm_fetch_index(unsigned long range)
     if (n > IDX_MAX)
         n = IDX_MAX;
 
+    left = st_bw;               /* bytes the device says it has staged */
+    have = 0;                   /* how many of them are sitting in stage[] */
+
     for (i = 0; i < n; i++) {
-        /* Read exactly one record per call so a record never straddles. */
-        gm_stage = "read";
-        got = network_read(url, (uint8_t *) &wire, REC_STRIDE);
-        if (got != REC_STRIDE)
-            break;              /* short read: EOF or error, keep what we have */
+        /* Refill until a whole record is in hand. This always fits: have is
+           below REC_STRIDE here and the buffer is IDX_READ + REC_STRIDE. */
+        while (have < REC_STRIDE) {
+            want = (left < (unsigned int) IDX_READ)
+                 ? left : (unsigned int) IDX_READ;
+            if (want == 0)
+                break;
+            gm_stage = "read";
+            got = network_read(url, stage + have, want);
+            if (got != (int) want)
+                break;
+            have += want;
+            left -= want;
+        }
+        if (have < REC_STRIDE)
+            break;          /* short read: EOF or error, keep what we have */
 
         /* The listing is newest-first and msgNum is a 1-based position counted
            from the oldest, so record 0 is the only place the folder size is
            available. */
         if (i == 0)
-            gm_total = rd32le(wire.msgnum) + range;
+            gm_total = rd32le(REC.msgnum) + range;
 
         parse_rec(i);
+
+        /* Carry whatever of the next record came in the same packet. Only a
+           packetised bus ever has a tail, so this is a no-op elsewhere -- and
+           it is a loop rather than memmove() because not every toolchain in
+           this family ships one. */
+        have -= REC_STRIDE;
+        for (j = 0; j < have; j++)
+            stage[j] = stage[REC_STRIDE + j];
     }
 
     gm_count = i;
@@ -461,21 +523,21 @@ static unsigned char fake_index(unsigned long range)
         num = FAKE_TOTAL - range - i;
         s = (unsigned char) ((i + (unsigned char) range) & 7);
 
-        memset(&wire, 0, sizeof(wire));
+        memset(stage, 0, sizeof(stage));
 
         /* Laid down as wire bytes, not assigned as a number, because that is
            what a record off the wire is -- and on a big-endian target the two
            are not the same thing. */
-        wire.msgnum[0] = (unsigned char) num;
-        wire.msgnum[1] = (unsigned char) (num >> 8);
-        wire.msgnum[2] = (unsigned char) (num >> 16);
-        wire.msgnum[3] = (unsigned char) (num >> 24);
+        REC.msgnum[0] = (unsigned char) num;
+        REC.msgnum[1] = (unsigned char) (num >> 8);
+        REC.msgnum[2] = (unsigned char) (num >> 16);
+        REC.msgnum[3] = (unsigned char) (num >> 24);
 
-        strcpy(wire.name, fake_name[s]);
+        strcpy(REC.name, fake_name[s]);
         if (s == 6)
-            wire.name[5] = 0x09;        /* a genuine wire control byte */
-        strcpy(wire.email, "someone.long.address@example.com");
-        strcpy(wire.subject, fake_subj[s]);
+            REC.name[5] = 0x09;         /* a genuine wire control byte */
+        strcpy(REC.email, "someone.long.address@example.com");
+        strcpy(REC.subject, fake_subj[s]);
 
         /*
          * Timestamps ascend with the message number, so the high-water mark
@@ -494,10 +556,10 @@ static unsigned char fake_index(unsigned long range)
          * is proving the column renders at all.
          */
         secs = FAKE_EPOCH - (unsigned long) (range + i) * FAKE_STEP;
-        wire.ts[0] = (unsigned char) secs;
-        wire.ts[1] = (unsigned char) (secs >> 8);
-        wire.ts[2] = (unsigned char) (secs >> 16);
-        wire.ts[3] = (unsigned char) (secs >> 24);
+        REC.ts[0] = (unsigned char) secs;
+        REC.ts[1] = (unsigned char) (secs >> 8);
+        REC.ts[2] = (unsigned char) (secs >> 16);
+        REC.ts[3] = (unsigned char) (secs >> 24);
 
         parse_rec(i);
     }
