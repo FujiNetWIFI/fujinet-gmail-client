@@ -7,9 +7,12 @@
  * calendar arithmetic are the fiddliest logic in the program, and iterating on
  * them through a 6502 cross-compile and an emulator round-trip is far too slow.
  *
- * Built twice, at both screen shapes -- see tests/Makefile. hosttest is the
- * Atari's 40 columns and hosttest80 the Apple II's 78, which is the only thing
- * that would catch a width the wrapper cannot actually reach.
+ * Built once per screen shape -- see tests/Makefile for the list. The widths
+ * range from the CoCo's 32 to the Apple II's 78, which is the only thing that
+ * would catch a width the wrapper cannot actually reach. The MS-DOS shapes add
+ * the one case where the wrap width is a runtime variable narrower than the
+ * storage (GM_RT_COLS); everywhere else WRAP_COLS is BODY_COLS and this file
+ * behaves exactly as it always did.
  *
  *   make -C tests
  */
@@ -140,12 +143,12 @@ static void ingest_str(const char *s)
 }
 
 /*
- * No produced row may exceed BODY_COLS.
+ * No produced row may exceed WRAP_COLS.
  *
- * This is the assertion the second binary exists for. Everything else in this
- * file passes at either width by construction -- the inputs are short and the
- * wrap tests name their widths as literals -- so nothing here would notice a
- * BODY_COLS that outran its BODY_STRIDE, a hard split off by one, or an
+ * This is the assertion the per-shape binaries exist for. Everything else in
+ * this file passes at any width by construction -- the inputs are short and
+ * the wrap tests name their widths as literals -- so nothing here would notice
+ * a wrap width that outran its BODY_STRIDE, a hard split off by one, or an
  * ellipsis written past the end of a row. Those all land as a row longer than
  * the screen, which on a real target is a blitter writing into the next line.
  */
@@ -155,11 +158,11 @@ static void rows_fit(const char *what)
 
     checks++;
     for (i = 0; i < gm_body_rows; i++) {
-        if (strlen(gm_body[i]) > BODY_COLS) {
+        if (strlen(gm_body[i]) > WRAP_COLS) {
             failures++;
             printf("  FAIL %s: row %u is %u wide, cap is %u\n       \"%s\"\n",
                    what, i, (unsigned int) strlen(gm_body[i]),
-                   (unsigned int) BODY_COLS, gm_body[i]);
+                   (unsigned int) WRAP_COLS, gm_body[i]);
             return;
         }
     }
@@ -248,20 +251,23 @@ static void test_body(void)
 
 /*
  * The width-dependent half, which is the whole reason this file is compiled
- * twice. Nothing here hardcodes a column count.
+ * once per shape. Nothing here hardcodes a column count: everything measures
+ * against WRAP_COLS, the width body.c actually wraps to, so the GM_RT_COLS
+ * shape exercises a runtime width narrower than the storage. The buffer is
+ * still sized from BODY_COLS -- the compile-time maximum is what arrays need.
  */
 static void test_body_width(void)
 {
     char big[BODY_COLS * 8 + LINE_CAP + 1];
     unsigned int want, ntok, i;
 
-    puts("body ingest at BODY_COLS");
+    puts("body ingest at WRAP_COLS");
 
     /*
      * A paragraph of five-character tokens, long enough to wrap several times.
-     * "aaaa " packs exactly (BODY_COLS + 1) / 5 tokens per row: the trailing
+     * "aaaa " packs exactly (WRAP_COLS + 1) / 5 tokens per row: the trailing
      * space of the last token on a row is the break, so a row holds as many
-     * whole tokens as fit in BODY_COLS + 1 columns.
+     * whole tokens as fit in WRAP_COLS + 1 columns.
      *
      * The token count comes off LINE_CAP because this is a test of the *wrap*,
      * and a paragraph longer than the line accumulator is no longer one line by
@@ -281,23 +287,23 @@ static void test_body_width(void)
     ingest_str(big);
     body_finish();
 
-    want = (ntok + (BODY_COLS + 1) / 5 - 1) / ((BODY_COLS + 1) / 5);
+    want = (ntok + (WRAP_COLS + 1) / 5 - 1) / ((WRAP_COLS + 1) / 5);
     eq_int("token rows scale with width", gm_body_rows, want);
     rows_fit("token paragraph");
 
     /* A single token three rows long has nowhere to break, so it is hard split
        at exactly the width -- every row but the last is full. */
     body_reset();
-    for (i = 0; i < BODY_COLS * 3; i++)
+    for (i = 0; i < WRAP_COLS * 3; i++)
         big[i] = 'x';
-    big[BODY_COLS * 3] = '\0';
+    big[WRAP_COLS * 3] = '\0';
     ingest_str(big);
     body_finish();
     eq_int("hard split rows", gm_body_rows, 3);
     rows_fit("hard split");
-    eq_int("split row 0 is full", strlen(gm_body[0]), BODY_COLS);
-    eq_int("split row 1 is full", strlen(gm_body[1]), BODY_COLS);
-    eq_int("split row 2 is full", strlen(gm_body[2]), BODY_COLS);
+    eq_int("split row 0 is full", strlen(gm_body[0]), WRAP_COLS);
+    eq_int("split row 1 is full", strlen(gm_body[1]), WRAP_COLS);
+    eq_int("split row 2 is full", strlen(gm_body[2]), WRAP_COLS);
 
     /* The ellipsis path writes into the last row it is allowed, which is the
        one place a row can be built up rather than copied. */
@@ -409,9 +415,17 @@ static void test_date(void)
 
 int main(void)
 {
-    printf("BODY_COLS=%u BODY_ROWS=%u LINE_CAP=%u ENT_SUBJ_LEN=%u\n\n",
-           (unsigned int) BODY_COLS, (unsigned int) BODY_ROWS,
-           (unsigned int) LINE_CAP, (unsigned int) ENT_SUBJ_LEN);
+#ifdef GM_RT_COLS
+    /* The runtime width a backend would set in plat_init(). The Makefile
+       passes the shape's value in as GM_TEST_COLS. */
+    gm_wrap_cols = GM_TEST_COLS;
+#endif
+
+    printf("BODY_COLS=%u WRAP_COLS=%u BODY_ROWS=%u LINE_CAP=%u"
+           " ENT_SUBJ_LEN=%u\n\n",
+           (unsigned int) BODY_COLS, (unsigned int) WRAP_COLS,
+           (unsigned int) BODY_ROWS, (unsigned int) LINE_CAP,
+           (unsigned int) ENT_SUBJ_LEN);
 
     test_sanitize();
     test_wrap();

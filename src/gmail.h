@@ -50,6 +50,23 @@
    with nothing to catch it. */
 #define BODY_STRIDE     (BODY_COLS + 1)
 
+/*
+ * The wrap width body.c actually uses. Equal to BODY_COLS everywhere except a
+ * backend that cannot know its screen width until it boots -- MS-DOS inherits
+ * whatever video mode it is started in, 40 columns or 80. Such a backend
+ * builds with -DGM_RT_COLS, sizes storage for its widest case through
+ * BODY_COLS above, and sets gm_wrap_cols in plat_init(), never above
+ * BODY_COLS. Wrapping narrower than the stride is safe; the reverse is the
+ * overflow the BODY_STRIDE comment describes, which is why the stride stays
+ * derived and only the width gets a runtime form.
+ */
+#ifdef GM_RT_COLS
+extern unsigned char gm_wrap_cols;
+#define WRAP_COLS   gm_wrap_cols
+#else
+#define WRAP_COLS   BODY_COLS
+#endif
+
 /* Longest raw line accumulated before a hard flush through the wrapper. It has
    to exceed BODY_COLS by enough that flush_overflow() has a space to break on;
    a couple of display rows' worth is plenty. */

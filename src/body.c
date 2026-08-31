@@ -19,6 +19,13 @@ char          gm_body[BODY_ROWS][BODY_STRIDE];
 unsigned int  gm_body_rows;
 unsigned char gm_body_trunc;
 
+#ifdef GM_RT_COLS
+/* The runtime wrap width -- see the WRAP_COLS comment in gmail.h. The
+   initializer only matters if a backend forgets to set it: full-width wrap
+   into full-width storage, which is merely the non-runtime behaviour. */
+unsigned char gm_wrap_cols = BODY_COLS;
+#endif
+
 static char         linebuf[LINE_CAP + 1];
 static unsigned int line_len;
 static unsigned char pending_lf;        /* saw CR, swallow a following LF */
@@ -49,7 +56,7 @@ static void flush_line(void)
 
     avail = BODY_ROWS - gm_body_rows;
     gm_body_rows += wrap_text(linebuf, gm_body[gm_body_rows],
-                              avail, BODY_COLS, BODY_STRIDE);
+                              avail, WRAP_COLS, BODY_STRIDE);
 
     if (gm_body_rows >= BODY_ROWS)
         gm_body_trunc = 1;

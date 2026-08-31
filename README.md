@@ -84,8 +84,16 @@ the SmartKeys carry that:
  [Read][Prev Pg][Next Pg][Refresh][ ][Quit]   <- the SmartKeys band
 ```
 
-**Message reader** — sender and date, subject wrapped to two lines, then the
-body word-wrapped to the screen width with a page indicator.
+MS-DOS renders the forty- and eighty-column layouts above and is the one
+machine that decides *at runtime* which: the same `GMAIL.EXE` inherits
+whatever video mode it is started in — 40×25 in modes 0/1, 80×25 in modes 2/3,
+and the MDA's mode 7 — and picks the Atari's layout or the Apple's to match,
+with a 25th row over the Apple's 24 spent on the content band. The chrome is
+CP437's own furniture (the ◆ unread diamond, real arrows in the hint bar, a
+single-line rule), the colour modes get an EDIT.EXE-family look with the hint
+bar pulled to Gmail red, and mode 7 is where the MDA earns its own column:
+intensity for unread rows, reverse video for the bars, and a real underline
+under the reader's subject — the one attribute no other adapter has.
 
 **Splash / busy / error** — flat screens with the logo. The error screen names
 the failure and shows the raw codes beneath it (`open code 212 dev 144`), which
@@ -119,6 +127,12 @@ That is an improvement rather than a concession: the key that leaves the program
 is never one keystroke away from the key that leaves a message. `CLEAR` joins
 `R` as refresh, mirroring the Atari's use of its own `CLEAR`.
 
+MS-DOS takes the CoCo's split — `ESC` backs out of the reader and is inert in
+the inbox, `Q` quits — and adds `PgUp`/`PgDn` as aliases for the page keys,
+because they are free on this keyboard and they are what a DOS user's fingers
+already do in a reader. On the PCjr the arrows themselves need the `Fn` shift,
+so the aliases are no worse there than anything else.
+
 ---
 
 ## Building
@@ -137,6 +151,8 @@ make apple2enh          # also builds a bootable ProDOS gmail.po
 make coco               # -> r2r/coco/gmail.bin and gmail.dsk
 
 defoogi make adam FUJINET_LIB=   # -> r2r/adam/gmail.ddp
+
+defoogi make msdos FUJINET_LIB=  # -> r2r/msdos/gmail.exe and gmail.img
 ```
 
 The CoCo build needs `cmoc` and `decb` (from
@@ -166,6 +182,29 @@ data pack: a 1 KB boot block followed by 255 KB of payload, of which the boot
 block loads as many 1 KB blocks as the linked image needs into `$0000` and jumps
 there. `gmail_BOOTSTRAP.bin` is written alongside it and is *already* the first
 kilobyte of the `.ddp` — nothing needs to be done with it.
+
+The MS-DOS build is the Adam's situation again — `wcc` lives only in the
+defoogi container, so `FUJINET_LIB=` blanks the absolute path the container
+cannot see and `fnlib.py` downloads the msdos release archive into `_cache/`.
+It is Open Watcom targeting the 8086 in the small model, so the binary runs on
+everything from a PCjr up. The 360 KB `gmail.img` is a driver disk:
+`GMAIL.EXE` plus `FUJINET.SYS`, `FUJIPRN.SYS`, the `CONFIG.SYS` that loads
+them and `FCONFIG.COM`, built from a clone of
+[fujinet-msdos](https://github.com/FujiNetWIFI/fujinet-msdos) inside the same
+container run — named parts rather than that repo's own `disk` target, because
+two of its subprojects now want `nasm`, which defoogi does not carry. The one
+thing the image is missing is DOS itself: `mformat` lays no system tracks, so
+`SYS A:` it from your DOS of choice, or copy the files onto a disk that
+already boots.
+
+`GMAIL.EXE` takes four switches, none normally needed: `/40` and `/80` force a
+width (and the mode change) instead of inheriting the current one, `/MONO`
+keeps the black-and-white attribute table on a colour adapter — for the LCD
+and composite screens that render colour as mud — and `/SNOW` gates every
+video write on the retrace for the genuine IBM CGA, the one card that snows in
+80-column text. It is a switch rather than a heuristic because there is no
+reliable way to detect a true CGA and every other machine would pay the wait
+for a fault it does not have.
 
 `make apple2enh` needs `ac` and `acx` from
 [AppleCommander](https://github.com/AppleCommander/AppleCommander/releases/); it
@@ -225,6 +264,19 @@ the disks, the network units and the Fuji gateway but not the clock. Without
 is labelled in UTC — quietly, because that is exactly what a machine with no
 clock is supposed to do.
 
+On the PC the far end is fujinet-pc-**rs232** and the resident driver carries
+the bus: `CONFIG.SYS` loads `FUJINET.SYS` (both already on `gmail.img`), which
+owns a COM port and installs the `INT F5` vector everything in this client
+talks through. `FUJI_PORT` picks the port — **the PCjr's internal UART sits at
+the COM2 address, so a PCjr needs `FUJI_PORT=2`** — and `FUJI_BPS` the rate.
+Under 86Box, a machine with `serialN_device = fujinet` wired to fujinet-pc's
+BoIP port is the same thing with the cable emulated; note that 86Box v7 reads
+`86box.cfg` all-lowercase, and silently starts a default machine if your
+config is named `86Box.cfg`. The driver sets DOS's clock from the FujiNet at
+load, but the client does not read the DOS clock — it asks the clock device
+for the ISO form directly, because the `+HHMM` offset is what turns the wire's
+UTC timestamps into a local date column.
+
 Gmail needs a Google grant with the `gmail.readonly` scope, authorized through
 the FujiNet Web UI — and it is per fujinet-pc instance, so a grant authorized
 against the Atari build's config is not visible to the CoCo build's. Only run
@@ -242,19 +294,28 @@ they run natively instead of through a cross-compile and an emulator:
 make -C tests
 ```
 
-Built four times, because the core's fixed widths are overridable and every
-backend overrides them: `hosttest` is the Atari's shape, `hosttest80` the Apple
-II's, `hosttest32` the CoCo's and `hosttestadam` the Adam's. That is the only
-way the width-dependent paths get covered at widths the Atari never reaches in
-either direction, and the assertion that earns the extra binaries is the one
-that checks no produced row is wider than `BODY_COLS` — a `BODY_STRIDE`
-mismatch or an off-by-one in the hard split lands there and nowhere else.
+Built once per screen shape, because the core's fixed widths are overridable
+and every backend overrides them: `hosttest` is the Atari's shape, `hosttest80`
+the Apple II's, `hosttest32` the CoCo's, `hosttestadam` the Adam's, and
+`hosttestdos`/`hosttestdos40` the two faces of the MS-DOS build. That is the
+only way the width-dependent paths get covered at widths the Atari never
+reaches in either direction, and the assertion that earns the extra binaries is
+the one that checks no produced row is wider than the wrap width — a
+`BODY_STRIDE` mismatch or an off-by-one in the hard split lands there and
+nowhere else.
 
 The fourth is not a duplicate of the third, though both are 32 columns wide. The
 CoCo pays for its narrow screen by dropping `IDX_MAX` to 11; the Adam has five
 more rows and keeps the portable 16. So `hosttestadam` is the only shape where
 the widest index meets the narrowest wrap, and the only one whose row budget is
 320.
+
+The MS-DOS pair is one backend, not two: the same binary stores 78-column rows
+and picks its wrap width at boot from the video mode, through the `GM_RT_COLS`
+hook in `src/gmail.h`. `hosttestdos` is that binary on an 80-column screen and
+`hosttestdos40` the same storage wrapping to 38 — the only shape anywhere with
+`WRAP_COLS` narrower than `BODY_COLS`, and therefore the only one that covers
+the hook at all.
 
 Adding the third shape found two latent bugs in this file rather than in the
 program, both of the same kind: a test that named a width as a literal but sized
@@ -352,6 +413,33 @@ REAL=1 WAIT=90 tools/adam-shot.sh           # against fujinet-pc-adam
 The capture is therefore timing-based rather than event-based, which is the one
 respect in which this harness is weaker than the other three; `WAIT` is generous
 by default for that reason.
+
+`tools/msdos-shot.sh` is the fifth, and the easiest of the lot, because a DOS
+program needs no debugger to give its screen up: the `GM_SHOT` hook in
+`src/msdos/input.c` writes the B800 text page to `SCREEN.BIN` at the moment
+the program would block on the keyboard, and the mounted host directory is
+where the file lands. dosbox-x's only job is to exist, under SDL's dummy
+video driver:
+
+```sh
+tools/msdos-shot.sh                          # canned data, first screen
+tools/msdos-shot.sh "K_DOWN,K_DOWN,K_ENTER"  # scripted keys, canned data
+MODE=40 tools/msdos-shot.sh                  # the 40-column layout
+MACHINE=hercules tools/msdos-shot.sh         # the MDA path, mode 7
+MACHINE=pcjr tools/msdos-shot.sh             # the PCjr's BIOS
+```
+
+`MACHINE=hercules` is the capture that earns its keep: dosbox-x's hercules
+machine boots *claiming mode 3*, which is exactly the trap the equipment-word
+probe in `src/msdos/screen.c` exists for, and how it got a regression test.
+`tools/msdos-decode.py` prints the glyphs and an attribute pane; the 0x70
+bars, the 0x0f unread rows and the 0x01 underline beneath the reader's subject
+are only visible in the second.
+
+One wart is this compiler's own: `wcc` cannot carry a comma through `-D` —
+everything after it parses as a second file to compile — so the script
+translates the `K_*` names into the digit string `GM_FAKE_KEYS_STR` and
+`src/msdos/input.c` accepts either spelling. Nobody types digits by hand.
 
 `tools/adam-decode.py` renders the result as a PNG, because on this machine a
 picture is the honest output — the screen is a bitmap and the parts of the
@@ -850,6 +938,117 @@ transport and ends 1,681 bytes higher, so it is the one that runs out first. At
 
 ---
 
+## MS-DOS implementation notes
+
+Open Watcom (`wcc`) targeting the 8086 in the small model, which is what "runs
+on all PCs" means in practice: nothing newer than an 8088 instruction, nothing
+fancier than the text page every adapter in the family exposes, one 64 KB
+group for all data. The build runs in the defoogi container, links upstream
+fujinet-lib's msdos archive, and talks to the resident `FUJINET.SYS` driver
+through software interrupt `F5h` — there is no serial code anywhere in this
+program.
+
+**The runtime width is the one genuinely new problem.** Every other backend
+knows its screen shape at compile time; a PC inherits whatever video mode it
+was started in. The screen layer probes the mode once in `plat_init()` — 40
+columns for modes 0/1, 80 for 2/3 and the MDA's 7 — and everything follows
+from that: `ui.c` keeps one set of painters and selects the Atari's or the
+Apple's column layout from a table, and the body wrap follows through
+`GM_RT_COLS`, a two-line hook in `src/gmail.h` that turns the wrap width
+`body.c` passes into a variable while `BODY_COLS` goes on sizing the storage
+for the widest case. Wrapping 38 columns into 79-byte rows wastes half of
+each row at 40 columns, and that is the entire price of one binary that runs
+everywhere; the reverse mismatch is the buffer overrun the `BODY_STRIDE`
+comment in `gmail.h` has always warned about, which is why the stride stays
+derived and only the width gets a runtime form.
+
+**The adapter, not the mode, decides where the text page is.** Bits 4-5 of
+the BIOS equipment word are `11` for a monochrome adapter, and that is the
+authoritative test for `B000` versus `B800` — an MDA or Hercules machine is
+not necessarily *in* mode 7 when the program starts. dosbox-x's hercules
+machine boots claiming mode 3, and the first draft of the probe trusted the
+mode and wrote four thousand bytes into an address no hardware was decoding.
+`plat_init()` now checks the equipment word first and normalises a monochrome
+machine to mode 7, which is also how the probe got a regression test
+(`MACHINE=hercules tools/msdos-shot.sh`).
+
+**Attribute roles instead of an `inv` flag.** The other backends' screen
+layers take one bit of emphasis; this hardware has attributes worth naming, so
+painters pass a role — `A_TEXT`, `A_EMPH`, `A_SEL`, `A_BAR`, `A_FOOT`,
+`A_UNDER` — and `screen.c` resolves it through one of three tables picked at
+init: colour (the EDIT.EXE-family look, hint bar pulled to Gmail red),
+black-and-white (modes 0/2, or `/MONO`), and the MDA's, where `A_UNDER` is a
+real underline. One improvement falls out for free: unread emphasis and the
+selection bar are independent attributes, so an unread row keeps its mark
+while selected — something no existing backend could afford. The unread mark
+itself is CP437's `◆`, and there is no `sc()` charset mapping at all: the
+byte in the string is the glyph in the cell, and since `copy_san()` clamps
+every wire field to `$20`-`$7E`, the control and high ranges belong to the
+chrome.
+
+**Cells are written straight into video memory,** not through the BIOS — INT
+10h costs two interrupts per cell and this program repaints whole screens on
+every page turn, which is visible at 4.77 MHz. The one machine direct writes
+upset is the genuine IBM CGA, which snows in 80-column text; `/SNOW` gates
+every write on the start of a horizontal retrace for that card, and it is a
+switch rather than a heuristic because a true CGA cannot be reliably
+detected, snow is cosmetic, and the PCjr, the MDA and virtually every clone
+would otherwise pay the wait for a fault they do not have.
+
+**Five fujinet-lib symbols are overridden app-side,** the `src/adam/`
+pattern — defining the symbol leaves the library's member unreferenced, and
+each file says when it can be deleted:
+
+- `clock_get_time()` (`clock_msdos.c`) — the msdos archive has no `fn_clock`
+  at all, so without this the link fails. Device `0x45`, command `'I'`
+  (`APETIME_GET_ISO_LOCAL`), twenty-five bytes of
+  `YYYY-MM-DDTHH:MM:SS+HHMM\0` — the same command the Adam shim sends, and
+  the reason the DOS clock is *not* used instead: `FUJITIME` sets DOS time
+  from the FujiNet, so INT 21h would hand back the same wall clock with the
+  `+HHMM` stripped, and the offset is the entire point.
+- `fuji_get_adapter_config_extended()` (`fuji_msdos.c`) — checks the INT F5
+  vector before the first bus call, because without `FUJINET.SYS` the vector
+  is null and `int86x` through it jumps to `0000:0000`. A missing driver
+  becomes the "FujiNet not found" screen naming `CONFIG.SYS`, instead of a
+  crash. Unlike the Adam's, the library's bool here is not inverted; this
+  override exists purely for the guard.
+- `network_open()` and `network_read()` (`net_msdos.c`) — the current
+  `FUJINET.SYS` speaks the FujiBusPacket protocol, in which `DH` is a field
+  descriptor telling the driver how the aux bytes become typed parameters —
+  and fujinet-lib 4.11.2's bus entries always send `DH=0`, no parameters at
+  all. Commands that need none (status, close, the fuji and clock devices)
+  work by luck; the two that carry them do not — the firmware logs
+  `Insufficient open paramaters: 0` and NAKs, which is how the first live run
+  against fujinet-pc-rs232 found it. The overrides carry their own bus entry
+  with `DH` set properly: `DH=2` (mode and trans as two u8 params) for the
+  open, `DH=5` (the length as one u16) for the read. The open also sends the
+  devicespec at its real length rather than the library's flat 256 — the
+  firmware takes the payload into a `std::string` verbatim — and the read
+  replaces a `__WATCOMC__` branch that passed the unit *number* where a
+  devicespec *pointer* was expected and bailed between chunks whenever the
+  status error byte was not exactly 1, zero-as-healthy being precisely the
+  Mailbox quirk `st_ok()` in `net.c` exists for.
+- `network_error()` (`net_msdos.c`) — the library's version returns
+  `network_status()`'s own return instead of the error byte it carried, and
+  `network_open()` returns `network_error()` on a failed open — so a refused
+  open reported *success*, and the 212 authorize-in-the-Web-UI error, the one
+  a first-time user is guaranteed to hit, could never name itself.
+
+`open_error()` in `net.c` gained `__MSDOS__` alongside `__APPLE2__`: the INT
+F5 bus layer never writes `fn_network_error`, so recovering the protocol's
+own code after a failed open takes the same single status query SmartPort
+needs.
+
+**The DGROUP budget** is the number to watch, not address space: the small
+model puts every static and the stack in one 64 KB group. `gm_body` at
+400 × 79 = 31,600 bytes is the largest thing in it and the whole group sits
+near 42 KB — `OPTION map` is on the link line, and the Makefile comment above
+`CFLAGS_EXTRA_MSDOS` carries the arithmetic. 400 rows is deliberately more
+than the Apple's 240: at 40 columns the same message needs about twice the
+rows it does at 78, and one binary has to be ready for either width.
+`GM_RXBUF` goes to 1 K because every `network_read` is a whole INT F5/RS-232
+round trip.
+
 ## Limitations
 
 Inherited from the adapter and the original, not accidents of the port:
@@ -927,7 +1126,17 @@ src/adam/       Coleco Adam backend
   input.c       SmartKeys, key mapping, the frame wait and the blocking read
   clock_adam.c  clock_get_time() -- fujinet-lib has none for this bus
   fuji_adam.c   the adapter probe, whose library version inverts its bool
-tests/          host-native tests, built at all four screen shapes
+src/msdos/      MS-DOS backend
+  platform.h    runtime geometry, attribute roles, CP437 glyphs, internal API
+  screen.c      the video probe, the attribute tables and the direct blitter
+  ui.c          every painter, at both widths
+  logo.c        the "M" as coloured CP437 blocks
+  input.c       INT 16h key mapping and the blocking read
+  clock_msdos.c clock_get_time() -- fujinet-lib has none for this bus
+  fuji_msdos.c  the adapter probe, guarding a null INT F5 vector
+  net_msdos.c   network_error() and network_read(), replacing library bugs
+  AUTOEXEC.BAT  @ECHO OFF and GMAIL, copied onto the disk with mcopy -t
+tests/          host-native tests, built once per screen shape
 tools/          headless capture and decode, per platform
 intv/           the IntyBASIC original, built on its own
 mekkogx/        the cross-platform build template
@@ -939,8 +1148,8 @@ glob steps over it and it reaches the compiler only as an `-I`.
 
 Built on [MekkoGX](https://github.com/FozzTexx/MekkoGX), a cross-platform build
 template for retro machines: that glob is what picks up `src/atari/`,
-`src/apple2enh/`, `src/coco/` and `src/adam/` automatically, and `FUJINET_LIB` is what
-fetches and links
+`src/apple2enh/`, `src/coco/`, `src/adam/` and `src/msdos/` automatically, and
+`FUJINET_LIB` is what fetches and links
 fujinet-lib. `mekkogx/platforms/apple2enh.mk` is a copy of `apple2.mk` rather
 than an include of it, because `common.mk` derives `PLATFORM` from the file that
 included it.

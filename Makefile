@@ -16,6 +16,7 @@ PLATFORMS += adam
 PLATFORMS += apple2enh
 PLATFORMS += atari
 PLATFORMS += coco
+PLATFORMS += msdos
 
 # You can run 'make <platform>' to build for a specific platform,
 # or 'make <platform>/<target>' for a platform-specific target.
@@ -217,6 +218,54 @@ LDFLAGS_EXTRA_COCO += --no-relocate -i
 #     of the disk buffer that LOADM itself needs. Disk I/O from an ASCII-loaded
 #     program does not work.
 
+# The PC is the one machine that does not know its own width until it boots:
+# the same GMAIL.EXE runs at 40x25 (modes 0/1), 80x25 (modes 2/3) and on an
+# MDA (mode 7), inheriting whatever mode it was started in. GM_RT_COLS is the
+# core hook for that: BODY_COLS sizes gm_body for the 80-column case, and
+# src/msdos/screen.c sets gm_wrap_cols to 38 or 78 at plat_init() -- wrapping
+# narrower than the stride is safe, and half-empty rows at 40 columns are the
+# price of one binary. Every mode is 25 rows, so MSG_ROWS and IDX_MAX need no
+# runtime treatment: rows 3-23 hold 21 body rows in the reader and the
+# portable sixteen entries in the inbox.
+#
+# The budget is DGROUP, not address space. The small model puts every static
+# and the stack in one 64K group, and gm_body at 400 x 79 = 31,600 bytes is
+# the largest thing in it; with gm_index (16 x ~181), the 1K rxbuf, linebuf,
+# the screen buffers and a 4K stack the group sits near 40K with over 20K
+# spare. Check DGROUP in r2r/msdos/gmail.map before raising BODY_ROWS, and
+# check the -DGM_FAKE_DATA build too -- it links the canned wire data
+# alongside the real transport. 400 rows is deliberately above the Apple's
+# 240: at 40 columns the same message needs about twice the rows it does at
+# 78, and this binary has to be ready for either width.
+#
+# GM_RXBUF goes to 1K because every network_read is a whole INT F5/RS-232
+# round trip through FUJINET.SYS; bigger chunks are fewer serial
+# transactions, and DGROUP has the room.
+#
+# -os is optimise-for-size; wcc's default is no optimisation at all.
+CFLAGS_EXTRA_MSDOS  = -os -DGM_RT_COLS -DMSG_ROWS=21
+CFLAGS_EXTRA_MSDOS += -DBODY_COLS=78 -DBODY_ROWS=400 -DLINE_CAP=256
+CFLAGS_EXTRA_MSDOS += -DENT_SUBJ_LEN=128 -DGM_RXBUF=1024
+
+# tools/msdos-shot.sh appends -DGM_FAKE_DATA / -DGM_FAKE_KEYS through here,
+# for the same reason the CoCo and the Adam have their *_SHOT_FLAGS: this
+# variable carries every screen-shape knob above and a command-line
+# assignment would replace the lot.
+CFLAGS_EXTRA_MSDOS += $(MSDOS_SHOT_FLAGS)
+
+# The map is how the DGROUP budget above gets checked, and the stack is set
+# explicitly rather than inherited from wlink's default so the 4K in the
+# arithmetic stays true.
+LDFLAGS_EXTRA_MSDOS  = OPTION map=r2r/msdos/gmail.map
+LDFLAGS_EXTRA_MSDOS += OPTION stack=4096
+
+# Like the Adam, the MS-DOS build cannot run on the host: wcc lives only in
+# the defoogi container, which mounts the project directory and nothing else,
+# so the absolute FUJINET_LIB above is invisible inside it. Blank it and
+# fnlib.py downloads the msdos release archive into the project's _cache/:
+#
+#   defoogi make msdos FUJINET_LIB=
+
 # HIRESTXT_LIB can be
 # - a version number such as 0.5.0.2
 # - a directory which contains the built library
@@ -242,3 +291,32 @@ include mekkogx/toplevel-rules.mk
 #   coco/r2r:: coco/custom-step2
 # or
 #   apple2/disk: apple2/custom-step1 apple2/custom-step2
+
+# The MS-DOS image is a driver disk: GMAIL.EXE plus the pieces of
+# fujinet-msdos a running FujiNet setup needs -- FUJINET.SYS and FUJIPRN.SYS
+# (the two drivers CONFIG.SYS loads), the CONFIG.SYS that loads them, and
+# FCONFIG for mounting and WiFi -- so the only thing the disk is missing is
+# DOS itself (mformat lays no system tracks; SYS A: it, or copy the files to
+# a bootable disk). The clone and the sub-make both happen inside the same
+# defoogi run that built gmail.exe: wcc is container-only and the container
+# has the network.
+#
+# Named parts rather than fujinet-config's `clean disk` + fn-msdos.img
+# extraction, because the full driver build no longer fits the container:
+# fmall and freset grew nasm dependencies, and defoogi ships wasm, not nasm.
+# Building only what the disk carries sidesteps both.
+#
+# mcopy -t converts the two text files to CRLF on the way in. AUTOEXEC.BAT
+# goes on last so nothing can shadow starting GMAIL.
+FUJINET_MSDOS_REPO = https://github.com/FujiNetWIFI/fujinet-msdos.git
+FUJINET_MSDOS_CACHE = $(CACHE_DIR)/fujinet-msdos
+FN_MSDOS_PARTS = sys/fujinet.sys printer/fujiprn.sys fconfig/fconfig.com
+
+msdos/disk-post::
+	@if [ ! -d $(FUJINET_MSDOS_CACHE) ]; then \
+	  git clone $(FUJINET_MSDOS_REPO) $(FUJINET_MSDOS_CACHE); \
+	fi
+	$(MAKE) -C $(FUJINET_MSDOS_CACHE) $(FN_MSDOS_PARTS)
+	mcopy -o -i $(DISK) $(addprefix $(FUJINET_MSDOS_CACHE)/,$(FN_MSDOS_PARTS)) '::/'
+	mcopy -t -o -i $(DISK) $(FUJINET_MSDOS_CACHE)/config.sys '::/CONFIG.SYS'
+	mcopy -t -o -i $(DISK) src/msdos/AUTOEXEC.BAT '::/AUTOEXEC.BAT'

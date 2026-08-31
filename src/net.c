@@ -90,7 +90,10 @@ static unsigned char    rxbuf[GM_RXBUF];
 #define REC             (*(struct wire_rec *) stage)
 
 /* Last network_status() result. */
-static unsigned int     st_bw;
+/* uint16_t rather than unsigned int, though every compiler in this family
+   makes them the same size: network_status() takes a uint16_t*, and Watcom
+   is the one compiler strict enough to reject the same-sized alias. */
+static uint16_t         st_bw;
 static unsigned char    st_conn;
 static unsigned char    st_err;
 
@@ -152,6 +155,12 @@ static unsigned char st_ok(unsigned char code)
  * 212 that means "authorize Google in the Web UI", which is the one error a
  * first-time user is guaranteed to hit and the one that has to name itself.
  *
+ * MS-DOS is the SmartPort case again: the INT F5 bus layer never writes
+ * fn_network_error at all, and only its fn_error() -- which its network_open
+ * never calls -- writes fn_device_error. The channel is likewise still
+ * addressable after a failed 'O', so the same single status query recovers
+ * the protocol's own code.
+ *
  * The fix is to ask, once. The channel is still addressable because
  * network_open set the unit before issuing the control command, and
  * network_status needs nothing else.
@@ -162,7 +171,7 @@ static unsigned char open_error(void)
        the failure path issues another device command and overwrites it. */
     gm_dev_ecode = fn_device_error;
 
-#ifdef __APPLE2__
+#if defined(__APPLE2__) || defined(__MSDOS__)
     {
         unsigned char dev  = gm_dev_ecode;
         unsigned char code = probe();
