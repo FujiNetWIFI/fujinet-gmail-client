@@ -97,7 +97,12 @@ static unsigned char map(unsigned char c)
     case KEY_ESCAPE:
     case KEY_UNDO:                      return K_BACK;
 
-    case 'r': case 'R': case KEY_CLEAR: return K_REFRESH;
+    /* R is K_REPLY everywhere and the inbox folds it into refresh; the
+       CLEAR key stays refresh outright. */
+    case 'r': case 'R':                 return K_REPLY;
+    case KEY_CLEAR:                     return K_REFRESH;
+    case 'c': case 'C':                 return K_COMPOSE;
+    case 'f': case 'F':                 return K_FORWARD;
     case 'q': case 'Q':                 return K_QUIT;
     }
 
@@ -185,4 +190,48 @@ void plat_anykey(void)
 
     while (!raw())
         plat_vsync();
+}
+
+/*
+ * The compose form's read. The SmartKeys stay first-class: ui_form() binds
+ * SK_FORM, whose key[] slots carry E_* codes rather than K_* ones, and the
+ * band is read through the same sk_key[] table -- so "Send" and "Done" are
+ * labelled keys here exactly as every other action on this machine is.
+ * The EOS backspace is $08; printable ASCII passes through verbatim.
+ */
+unsigned char plat_getch(void)
+{
+    unsigned char c;
+
+#ifdef GM_FAKE_KEYS
+    /* Spent verbatim: the scripted K_* codes' low values land on E_* inside
+       the form, which is what lets a capture drive the field cursor. */
+    if (fake_idx < sizeof(fake_keys))
+        return fake_keys[fake_idx++];
+#endif
+
+    for (;;) {
+        c = raw();
+        if (c) {
+            if (c >= SMARTKEY_I && c <= SMARTKEY_VI) {
+                c = sk_key[c - SMARTKEY_I];
+                if (c != K_NONE)
+                    return c;
+            } else {
+                switch (c) {
+                case KEY_UP:        return E_UP;
+                case KEY_DOWN:      return E_DOWN;
+                case KEY_LEFT:      return E_LEFT;
+                case KEY_RIGHT:     return E_RIGHT;
+                case KEY_RETURN:    return E_ENTER;
+                case KEY_ESCAPE:
+                case KEY_UNDO:      return E_DONE;
+                case 0x08:          return E_BS;
+                }
+                if (c >= 0x20 && c < 0x7F)
+                    return c;
+            }
+        }
+        plat_vsync();
+    }
 }

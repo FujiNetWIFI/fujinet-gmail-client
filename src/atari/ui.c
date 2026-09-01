@@ -72,9 +72,18 @@ void ui_busy(unsigned char reason)
     if (reason == BUSY_INDEX) {
         scr_center(11, "Opening mailbox...", 0);
         scr_center(13, "up to 60 seconds", 0);
+    } else if (reason == BUSY_SEND) {
+        scr_center(11, "Sending message...", 0);
     } else {
         scr_center(11, "Fetching message...", 0);
     }
+}
+
+void ui_sent(void)
+{
+    flat_screen();
+    scr_center(11, "Message sent", 0);
+    scr_center(15, "PRESS ANY KEY", 0);
 }
 
 void ui_error(unsigned char code)
@@ -93,6 +102,13 @@ void ui_error(unsigned char code)
         break;
     case GM_NOTFOUND:
         l1 = "Message not found";
+        break;
+    case GM_REJECTED:
+        l1 = "Draft rejected";
+        l2 = "check the address";
+        break;
+    case GM_TOOBIG:
+        l1 = "Message too large";
         break;
     case GM_NOSERVICE:
         l1 = "Service unavailable";
@@ -232,7 +248,7 @@ void ui_inbox(void)
     }
 
     draw_detail();
-    scr_text(FOOT_ROW, 1, "RET:READ  <>:PAGE  R:REFRESH  ESC:QUIT", 0);
+    scr_text(FOOT_ROW, 1, "RET:READ <>:PAGE C:NEW R:REFR ESC:QUIT", 0);
 }
 
 /* Repaint only what a selection move touched. gm_sel is already the new one. */
@@ -284,7 +300,7 @@ void ui_message(unsigned int top)
     scr_rows_clear(MSG_TOP + MSG_ROWS, FOOT_ROW - 1);
 
     scr_row_clear(FOOT_ROW);
-    scr_text(FOOT_ROW, 1, "^v:LINE  <>:PAGE  ESC:BACK", 0);
+    scr_text(FOOT_ROW, 1, "R:RPLY F:FWD ^v:LN <>:PG ESC:BK", 0);
 
     pages = (gm_body_rows + MSG_ROWS - 1) / MSG_ROWS;
     if (pages == 0)
@@ -304,4 +320,99 @@ void ui_message(unsigned int top)
     if (gm_body_trunc)
         strcat(sbuf, "+");
     scr_right(FOOT_ROW, 38, sbuf, 0);
+}
+
+/* ------------------------------------------------------------------ */
+/* Compose form                                                        */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A banded screen like the inbox: header rows 0-2 carry the logo and the
+ * mode title, the fields live in the content band, the footer keeps its
+ * row. The active field is drawn as a full inverse bar with the cursor
+ * cell knocked back to normal video -- a hole in the bar. compose.c owns
+ * the cursor and the horizontal scroll; this end only paints what it is
+ * given.
+ */
+
+#define FRM_BODY_TOP    6
+#define FRM_HINT_ROW    (FRM_BODY_TOP + FRM_NBODY + 1)
+#define FRM_MSG_ROW     (FRM_HINT_ROW + 2)
+#define FRM_HDR_COL     6       /* TO/SUBJECT value column */
+
+#if FRM_MSG_ROW > 22
+#error "the form no longer fits above the footer band -- lower FRM_NBODY"
+#endif
+
+static unsigned char frm_row(unsigned char f)
+{
+    if (f == F_TO)
+        return 3;
+    if (f == F_SUBJ)
+        return 4;
+    return (unsigned char) (FRM_BODY_TOP + (f - F_BODY0));
+}
+
+static unsigned char frm_col(unsigned char f)
+{
+    return (unsigned char) ((f >= F_BODY0) ? 1 : FRM_HDR_COL);
+}
+
+/* One cell more than the storage width, so the cursor can sit past a full
+   body line; the headers window 34 of their 63 and scroll. */
+unsigned char ui_form_width(unsigned char f)
+{
+    return (unsigned char) ((f >= F_BODY0) ? (FRM_BODY_COLS + 1) : 34);
+}
+
+void ui_form(unsigned char mode)
+{
+    dli_bands();
+    scr_clear();
+    pmg_show(LOGO_SMALL, 0, 1);
+
+    scr_text(1, 13, "Gmail", 0);
+    scr_text(1, 20, (mode == FRM_REPLY) ? "Reply"
+                  : (mode == FRM_FWD)   ? "Forward"
+                                        : "New message", 0);
+
+    scr_text(3, 1, "To", 0);
+    scr_text(4, 1, "Subj", 0);
+
+    if (mode == FRM_REPLY)
+        scr_text(FRM_HINT_ROW, 1, "Blank To/Subj = reply defaults", 0);
+
+    scr_text(FOOT_ROW, 1, "RET:NEXT  ^v:FIELD  ESC:DONE", 0);
+}
+
+void ui_form_row(unsigned char f, const char *win, unsigned char curx,
+                 unsigned char active)
+{
+    unsigned char w = ui_form_width(f);
+    unsigned char col = frm_col(f);
+    char          b[2];
+
+    scr_field(frm_row(f), col, win, w, active);
+
+    if (active) {
+        b[0] = curx < strlen(win) ? win[curx] : ' ';
+        b[1] = '\0';
+        scr_field(frm_row(f), (unsigned char) (col + curx), b, 1, 0);
+    }
+}
+
+void ui_form_msg(unsigned char msg)
+{
+    const char *s;
+
+    scr_row_clear(FRM_MSG_ROW);
+
+    switch (msg) {
+    case FM_ASK:      s = "Send? (Y/N)";      break;
+    case FM_NEEDTO:   s = "To required";      break;
+    case FM_NEEDBODY: s = "Message required"; break;
+    default:          return;               /* FM_NONE: cleared above */
+    }
+
+    scr_center(FRM_MSG_ROW, s, 1);
 }

@@ -1,10 +1,12 @@
 # Host-side tests for the portable text handling.
 #
-# src/wrap.c, src/sanitize.c, src/body.c and src/date.c depend on nothing but
-# the C library, so they build natively. Everything else in src/ needs cc65 and
-# a FujiNet, and is exercised through the emulator instead -- src/clock.c is
-# nothing but a device call, so hosttest.c owns the two variables it would
-# otherwise define.
+# src/wrap.c, src/sanitize.c, src/body.c, src/date.c and src/form.c depend on
+# nothing but the C library, so they build natively. Everything else in src/
+# needs cc65 and a FujiNet, and is exercised through the emulator instead --
+# src/clock.c is nothing but a device call, so hosttest.c owns the two
+# variables it would otherwise define, and net.c is the transport, so
+# hosttest.c owns the index record, the selection, and the draft channel
+# (gm_send_put becomes the capture the form tests assert against).
 #
 # Built once per screen shape, because the core's fixed widths are overridable
 # and the backends do override them. hosttest is the Atari's shape, hosttest80
@@ -34,19 +36,23 @@ CC      ?= cc
 CFLAGS  ?= -O1 -g -Wall -Wextra -Wno-unused-parameter
 
 # Keep in step with CFLAGS_EXTRA_APPLE2ENH in the top-level Makefile.
-CFLAGS80 = -DBODY_COLS=78 -DBODY_ROWS=240 -DLINE_CAP=256 -DENT_SUBJ_LEN=128
+CFLAGS80 = -DBODY_COLS=78 -DBODY_ROWS=232 -DLINE_CAP=256 -DENT_SUBJ_LEN=128
+CFLAGS80 += -DFRM_NBODY=14 -DFRM_BODY_COLS=76
 
 # Keep in step with CFLAGS_EXTRA_COCO. LINE_CAP is absent from both, on purpose:
 # the CoCo keeps the 200-byte default.
-CFLAGS32 = -DBODY_COLS=32 -DBODY_ROWS=288 -DENT_SUBJ_LEN=48 -DIDX_MAX=11
+CFLAGS32 = -DBODY_COLS=32 -DBODY_ROWS=208 -DENT_SUBJ_LEN=48 -DIDX_MAX=11
+CFLAGS32 += -DFRM_NBODY=6 -DFRM_BODY_COLS=32
 
 # Keep in step with CFLAGS_EXTRA_ADAM. IDX_MAX and LINE_CAP are absent because
 # this backend keeps both defaults -- which is the whole point of the shape.
 CFLAGSADAM = -DBODY_COLS=32 -DBODY_ROWS=320 -DENT_SUBJ_LEN=48
+CFLAGSADAM += -DFRM_NBODY=12 -DFRM_BODY_COLS=32
 
 # Keep in step with CFLAGS_EXTRA_MSDOS. The storage shape is the Apple's
 # 78-column one; only BODY_ROWS distinguishes hosttestdos from hosttest80.
 CFLAGSDOS = -DBODY_COLS=78 -DBODY_ROWS=400 -DLINE_CAP=256 -DENT_SUBJ_LEN=128
+CFLAGSDOS += -DFRM_NBODY=14 -DFRM_BODY_COLS=76
 
 # The MS-DOS build wraps at runtime: the same binary stores 78-column rows and
 # wraps to 38 when the machine boots in 40 columns. This is the only shape
@@ -54,7 +60,8 @@ CFLAGSDOS = -DBODY_COLS=78 -DBODY_ROWS=400 -DLINE_CAP=256 -DENT_SUBJ_LEN=128
 # GM_RT_COLS hook and a wrap far narrower than its stride.
 CFLAGSDOS40 = $(CFLAGSDOS) -DGM_RT_COLS -DGM_TEST_COLS=38
 
-SRC = hosttest.c ../src/wrap.c ../src/sanitize.c ../src/body.c ../src/date.c
+SRC = hosttest.c ../src/wrap.c ../src/sanitize.c ../src/body.c ../src/date.c \
+      ../src/form.c
 
 all: hosttest hosttest80 hosttest32 hosttestadam hosttestdos hosttestdos40
 	./hosttest

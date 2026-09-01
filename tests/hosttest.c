@@ -30,6 +30,48 @@
 int          gm_tzoff;
 unsigned int gm_year;
 
+/*
+ * form.c reads the index record and the selection, which net.c and main.c
+ * own on a real target; neither builds here, so this file owns both, which
+ * makes the forward block's From/Date/Subject test inputs.
+ */
+struct entry  gm_index[IDX_MAX];
+unsigned char gm_sel;
+
+/*
+ * The draft channel, captured. gm_send_put() is net.c's on a real target;
+ * here it appends into a buffer the form tests assert against byte for
+ * byte, and gm_send_room() runs down exactly the way the real one does --
+ * which is what makes the forward truncation budget testable.
+ */
+static char         cap_buf[GM_SEND_MAX + 256];
+static unsigned int cap_len;
+static unsigned int cap_used;
+
+void gm_send_put(const char *line)
+{
+    unsigned int n = (unsigned int) strlen(line);
+
+    cap_used += n;
+    if (cap_len + n < sizeof(cap_buf)) {
+        memcpy(cap_buf + cap_len, line, n);
+        cap_len += n;
+        cap_buf[cap_len] = '\0';
+    }
+}
+
+unsigned int gm_send_room(void)
+{
+    return (cap_used < GM_SEND_MAX) ? (GM_SEND_MAX - cap_used) : 0;
+}
+
+static void cap_reset(void)
+{
+    cap_len = 0;
+    cap_used = 0;
+    cap_buf[0] = '\0';
+}
+
 static int failures;
 static int checks;
 
@@ -413,6 +455,181 @@ static void test_date(void)
     eq_date("zero rejected", 0UL, "");
 }
 
+/* ------------------------------------------------------------------ */
+
+static void test_form(void)
+{
+    unsigned char bad;
+
+    puts("form");
+
+    /* Field access: the pointer walk must land on the members it claims. */
+    form_init(FRM_COMPOSE);
+    eq_int("ptr TO", form_field_ptr(F_TO) == frm.to, 1);
+    eq_int("ptr SUBJ", form_field_ptr(F_SUBJ) == frm.subj, 1);
+    eq_int("ptr BODY0", form_field_ptr(F_BODY0) == frm.body[0], 1);
+    eq_int("ptr last body",
+           form_field_ptr(FRM_NFIELDS - 1) == frm.body[FRM_NBODY - 1], 1);
+    eq_int("max TO", form_field_max(F_TO), FRM_TO_MAX);
+    eq_int("max SUBJ", form_field_max(F_SUBJ), FRM_SUBJ_MAX);
+    eq_int("max body", form_field_max(F_BODY0), FRM_BODY_COLS);
+
+    /* Validation, per mode. */
+    form_init(FRM_COMPOSE);
+    eq_int("compose needs TO", form_validate(&bad), FM_NEEDTO);
+    eq_int("bad is TO", bad, F_TO);
+    strcpy(frm.to, "a@b");
+    eq_int("compose needs body", form_validate(&bad), FM_NEEDBODY);
+    eq_int("bad is body", bad, F_BODY0);
+    strcpy(frm.body[0], "hi");
+    eq_int("compose sound", form_validate(&bad), FM_NONE);
+
+    form_init(FRM_REPLY);
+    eq_int("reply needs body only", form_validate(&bad), FM_NEEDBODY);
+    strcpy(frm.body[2], "ok");          /* any line counts */
+    eq_int("reply sound, no TO", form_validate(&bad), FM_NONE);
+
+    /* Compose emission, byte for byte. */
+    form_init(FRM_COMPOSE);
+    strcpy(frm.to, "a@b");
+    strcpy(frm.subj, "hi");
+    strcpy(frm.body[0], "line one");
+    strcpy(frm.body[1], "line two");
+    cap_reset();
+    form_emit();
+    eq_str("compose draft", cap_buf,
+           "TO: a@b\nSUBJECT: hi\n\nline one\nline two\n");
+
+    /* A bare-body reply is exactly the blank header line plus the body:
+       omitted TO and SUBJECT are how the adapter's defaults are asked
+       for -- see mail_draft_finalize in the firmware. */
+    form_init(FRM_REPLY);
+    strcpy(frm.body[0], "ok");
+    cap_reset();
+    form_emit();
+    eq_str("bare-body reply", cap_buf, "\nok\n");
+
+    /* A typed TO on a reply goes out and overrides the default. */
+    form_init(FRM_REPLY);
+    strcpy(frm.to, "x@y");
+    strcpy(frm.body[0], "ok");
+    cap_reset();
+    form_emit();
+    eq_str("typed reply TO", cap_buf, "TO: x@y\n\nok\n");
+
+    /* Trailing blank body lines are trimmed; interior ones survive. */
+    form_init(FRM_COMPOSE);
+    strcpy(frm.to, "t@e");
+    strcpy(frm.body[0], "a");
+    strcpy(frm.body[2], "b");
+    cap_reset();
+    form_emit();
+    eq_str("interior blank kept", cap_buf, "TO: t@e\n\na\n\nb\n");
+
+    /* Forward: subject prefilled where the user can still edit it, never
+       doubled, and the prefill does not dirty the form. */
+    gm_sel = 0;
+    strcpy(gm_index[0].name, "Alice Kim");
+    strcpy(gm_index[0].subject, "Status");
+    ts_set(gm_index[0].ts, 1787927520UL);   /* Aug 28 14:32 UTC */
+    gm_tzoff = 0;
+    gm_year = 2026;
+
+    form_init(FRM_FWD);
+    eq_str("fwd subject", frm.subj, "Fwd: Status");
+    eq_int("prefill not dirty", form_any_dirty(), 0);
+    eq_int("fwd needs TO", form_validate(&bad), FM_NEEDTO);
+    strcpy(frm.to, "t@e");
+    eq_int("fwd needs no body", form_validate(&bad), FM_NONE);
+
+    strcpy(gm_index[0].subject, "Fwd: Status");
+    form_init(FRM_FWD);
+    eq_str("fwd not doubled", frm.subj, "Fwd: Status");
+    strcpy(gm_index[0].subject, "Status");
+
+    /* The forward block, no intro: the separator follows the header blank
+       line directly, and the original rows come out verbatim. */
+    body_reset();
+    ingest_str("original line\n");
+    body_finish();
+
+    form_init(FRM_FWD);
+    strcpy(frm.to, "t@e");
+    cap_reset();
+    form_emit();
+    eq_str("forward draft", cap_buf,
+           "TO: t@e\nSUBJECT: Fwd: Status\n\n"
+           "---------- Forwarded message ----------\n"
+           "From: Alice Kim\nDate: Aug 28 14:32\nSubject: Status\n\n"
+           "original line\n");
+
+    /* With an intro, one blank line separates it from the block. */
+    form_init(FRM_FWD);
+    strcpy(frm.to, "t@e");
+    strcpy(frm.body[0], "fyi");
+    cap_reset();
+    form_emit();
+    eq_str("forward with intro", cap_buf,
+           "TO: t@e\nSUBJECT: Fwd: Status\n\nfyi\n\n"
+           "---------- Forwarded message ----------\n"
+           "From: Alice Kim\nDate: Aug 28 14:32\nSubject: Status\n\n"
+           "original line\n");
+
+    /* A body the reader already truncated carries the notice even when
+       what was kept fits the draft. */
+    gm_body_trunc = 1;
+    form_init(FRM_FWD);
+    strcpy(frm.to, "t@e");
+    cap_reset();
+    form_emit();
+    eq_int("ingest truncation carries the notice",
+           cap_len >= 30 &&
+           strcmp(cap_buf + cap_len - 30,
+                  "[forwarded message truncated]\n") == 0, 1);
+    gm_body_trunc = 0;
+
+    /*
+     * The truncation budget. Fill the body to its cap with full-width rows
+     * -- more than the adapter's 16K on the wide shapes, comfortably less
+     * on the narrow ones -- and the invariant is the same everywhere: the
+     * draft stays under GM_SEND_MAX, and the notice appears exactly when
+     * rows were dropped. This is the assertion that makes the wide-shape
+     * binaries matter to the form the way they matter to the wrap.
+     */
+    {
+        unsigned long full;
+        unsigned int  r;
+
+        for (r = 0; r < BODY_ROWS; r++) {
+            memset(gm_body[r], 'x', WRAP_COLS);
+            gm_body[r][WRAP_COLS] = '\0';
+        }
+        gm_body_rows = BODY_ROWS;
+        gm_body_trunc = 0;
+
+        form_init(FRM_FWD);
+        strcpy(frm.to, "t@e");
+        cap_reset();
+        form_emit();
+
+        eq_int("forward stays under the cap", cap_used <= GM_SEND_MAX, 1);
+
+        full = strlen("TO: t@e\nSUBJECT: Fwd: Status\n\n")
+             + strlen("---------- Forwarded message ----------\n")
+             + strlen("From: Alice Kim\nDate: Aug 28 14:32\n")
+             + strlen("Subject: Status\n\n")
+             + (unsigned long) BODY_ROWS * (WRAP_COLS + 1);
+
+        if (full > GM_SEND_MAX)
+            eq_int("notice on overflow",
+                   cap_len >= 30 &&
+                   strcmp(cap_buf + cap_len - 30,
+                          "[forwarded message truncated]\n") == 0, 1);
+        else
+            eq_int("no notice when it fits", cap_used, (long) full);
+    }
+}
+
 int main(void)
 {
 #ifdef GM_RT_COLS
@@ -432,6 +649,7 @@ int main(void)
     test_body();
     test_body_width();
     test_date();
+    test_form();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures != 0;

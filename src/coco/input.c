@@ -52,7 +52,13 @@ static unsigned char map(unsigned char c)
     case KEY_ENTER:                     return K_ENTER;
     case KEY_BREAK:                     return K_BACK;
 
-    case 'r': case 'R': case KEY_CLEAR: return K_REFRESH;
+    /* R is K_REPLY everywhere and the inbox folds it into refresh; the
+       CLEAR key stays refresh outright. inkey() yields uppercase only,
+       but the lowercase cases stay for symmetry with the other four. */
+    case 'r': case 'R':                 return K_REPLY;
+    case KEY_CLEAR:                     return K_REFRESH;
+    case 'c': case 'C':                 return K_COMPOSE;
+    case 'f': case 'F':                 return K_FORWARD;
     case 'q': case 'Q':                 return K_QUIT;
     }
 
@@ -124,4 +130,37 @@ unsigned char plat_getkey(void)
 void plat_anykey(void)
 {
     key_block();
+}
+
+/*
+ * The compose form's read. The left arrow is E_BS rather than a cursor
+ * move, because on this keyboard the left arrow *is* the erase key --
+ * BASIC's own convention -- which leaves the editor append-and-backspace:
+ * there is no key left to walk the cursor with, and a 32-cell window does
+ * not miss it. inkey() yields the 6847's uppercase-only set, which is also
+ * all the screen could echo.
+ */
+unsigned char plat_getch(void)
+{
+#ifdef GM_FAKE_KEYS
+    /* Spent verbatim: the scripted K_* codes' low values land on E_* inside
+       the form, which is what lets a capture drive the field cursor. */
+    if (fake_idx < sizeof(fake_keys))
+        return fake_keys[fake_idx++];
+#endif
+
+    for (;;) {
+        unsigned char c = key_block();
+
+        switch (c) {
+        case KEY_UP:    return E_UP;
+        case KEY_DOWN:  return E_DOWN;
+        case KEY_ENTER: return E_ENTER;
+        case KEY_BREAK: return E_DONE;
+        case KEY_LEFT:  return E_BS;
+        }
+
+        if (c >= 0x20 && c < 0x7F)
+            return c;
+    }
 }

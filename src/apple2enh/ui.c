@@ -120,9 +120,18 @@ void ui_busy(unsigned char reason)
     if (reason == BUSY_INDEX) {
         scr_center(13, MT_HOURGLASS " Opening mailbox...", 0);
         scr_center(15, "up to 60 seconds", 0);
+    } else if (reason == BUSY_SEND) {
+        scr_center(13, MT_HOURGLASS " Sending message...", 0);
     } else {
         scr_center(13, MT_HOURGLASS " Fetching message...", 0);
     }
+}
+
+void ui_sent(void)
+{
+    flat_screen();
+    scr_center(13, "Message sent", 0);
+    scr_center(17, "PRESS ANY KEY", 0);
 }
 
 void ui_error(unsigned char code)
@@ -137,10 +146,17 @@ void ui_error(unsigned char code)
         break;
     case GM_DENIED:
         l1 = "Google access denied";
-        l2 = "re-authorize -- the grant needs gmail.readonly";
+        l2 = "re-authorize in the Web UI -- the grant is missing a scope";
         break;
     case GM_NOTFOUND:
         l1 = "Message not found";
+        break;
+    case GM_REJECTED:
+        l1 = "Draft rejected";
+        l2 = "check the address";
+        break;
+    case GM_TOOBIG:
+        l1 = "Message too large";
         break;
     case GM_NOSERVICE:
         l1 = "Service unavailable";
@@ -289,7 +305,7 @@ void ui_inbox(void)
     draw_detail();
 
     footer("RET" MT_RETURN ":READ   " MT_UP MT_DOWN ":MOVE   "
-           MT_LEFT MT_RIGHT ":PAGE   R:REFRESH   ESC:QUIT", 0);
+           MT_LEFT MT_RIGHT ":PAGE   C:COMPOSE   R:REFRESH   ESC:QUIT", 0);
 }
 
 /* Repaint only what a selection move touched. gm_sel is already the new one. */
@@ -358,5 +374,105 @@ void ui_message(unsigned int top)
     if (gm_body_trunc)
         strcat(sbuf, "+");
 
-    footer(MT_UP MT_DOWN ":LINE   " MT_LEFT MT_RIGHT ":PAGE   ESC:BACK", sbuf);
+    footer("R:REPLY   F:FORWARD   " MT_UP MT_DOWN ":LINE   "
+           MT_LEFT MT_RIGHT ":PAGE   ESC:BACK", sbuf);
+}
+
+/* ------------------------------------------------------------------ */
+/* Compose form                                                        */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The flat arrangement with eighty columns to spend: full-word labels, a
+ * rule under the headers the way the inbox rules off its detail band, and
+ * the widest field windows of the five backends -- the headers never even
+ * scroll. The active field is a full inverse bar -- the list's selection
+ * language -- with the cursor cell knocked back to normal video, a hole in
+ * the bar. compose.c owns the cursor and the horizontal scroll; this end
+ * paints what it is given.
+ */
+
+#define FRM_BODY_TOP    6
+#define FRM_HINT_ROW    (FRM_BODY_TOP + FRM_NBODY + 1)
+#define FRM_MSG_ROW     (FRM_HINT_ROW + 1)
+#define FRM_VAL_COL     10      /* TO/SUBJECT value column */
+
+#if FRM_MSG_ROW > 22
+#error "the form no longer fits above the footer -- lower FRM_NBODY"
+#endif
+
+static unsigned char frm_row(unsigned char f)
+{
+    if (f == F_TO)
+        return 3;
+    if (f == F_SUBJ)
+        return 4;
+    return (unsigned char) (FRM_BODY_TOP + (f - F_BODY0));
+}
+
+static unsigned char frm_col(unsigned char f)
+{
+    return (unsigned char) ((f >= F_BODY0) ? 1 : FRM_VAL_COL);
+}
+
+/* One cell more than the storage width, so the cursor can sit past a full
+   value; both header fields fit their windows whole. */
+unsigned char ui_form_width(unsigned char f)
+{
+    return (unsigned char) ((f >= F_BODY0) ? (FRM_BODY_COLS + 1)
+                                           : (FRM_TO_MAX + 1));
+}
+
+void ui_form(unsigned char mode)
+{
+    scr_clear();
+
+    scr_field(0, 0, "", SCR_COLS, 1);           /* the app bar */
+    logo_small(LOGO_ROW, LOGO_COL);
+    scr_text(0, HDR_TEXT_COL, (mode == FRM_REPLY) ? "Reply"
+                            : (mode == FRM_FWD)   ? "Forward"
+                                                  : "New message", 1);
+
+    scr_text(3, 2, "To", 0);
+    scr_text(4, 2, "Subject", 0);
+    scr_fill(5, 2, MT_RULE, RIGHT_COL - 1, 0);
+
+    if (mode == FRM_REPLY)
+        scr_text(FRM_HINT_ROW, 2,
+                 "Blank To and Subject take the reply defaults", 0);
+
+    footer("RET" MT_RETURN ":NEXT   " MT_UP MT_DOWN ":FIELD   "
+           MT_LEFT MT_RIGHT ":CURSOR   DEL:ERASE   ESC:DONE", 0);
+}
+
+void ui_form_row(unsigned char f, const char *win, unsigned char curx,
+                 unsigned char active)
+{
+    unsigned char w = ui_form_width(f);
+    unsigned char col = frm_col(f);
+    char          b[2];
+
+    scr_field(frm_row(f), col, win, w, active);
+
+    if (active) {
+        b[0] = curx < strlen(win) ? win[curx] : ' ';
+        b[1] = '\0';
+        scr_field(frm_row(f), (unsigned char) (col + curx), b, 1, 0);
+    }
+}
+
+void ui_form_msg(unsigned char msg)
+{
+    const char *s;
+
+    scr_row_clear(FRM_MSG_ROW);
+
+    switch (msg) {
+    case FM_ASK:      s = "Send message? (Y/N)";     break;
+    case FM_NEEDTO:   s = "A recipient is required"; break;
+    case FM_NEEDBODY: s = "A message is required";   break;
+    default:          return;                   /* FM_NONE: cleared above */
+    }
+
+    scr_center(FRM_MSG_ROW, s, 1);
 }

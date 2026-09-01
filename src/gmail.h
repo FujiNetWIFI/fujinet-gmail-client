@@ -123,11 +123,18 @@ struct wire_rec {
 
 /* Access modes (Protocol.h ACCESS_MODE). On a DIRECTORY open aux2 is a format
    selector: 255 = raw structs. On a READ open aux2 is the real EOL
-   translation code. */
+   translation code. On a WRITE open aux2 is unused and stays 0. */
 #define MB_MODE_READ    4
 #define MB_MODE_DIR     6
+#define MB_MODE_WRITE   8
 #define MB_FMT_RAW      255
 #define MB_TRANS_CRLF   3
+
+/* The adapter buffers the whole draft and refuses to grow past this
+   (MB_MAX_WRITE in the firmware's Mailbox.cpp). Tripping the device-side cap
+   poisons the draft -- 162 on the write and the close cannot commit -- so the
+   client stops strictly short of it; see the budget check in form.c. */
+#define GM_SEND_MAX     16384
 
 /* NDEV_STATUS codes (status_error_codes.h) that this client maps.
    Success is reported as 0 over SIO and as 1 elsewhere -- see st_ok() in
@@ -136,6 +143,8 @@ struct wire_rec {
 #define GM_OK           1
 #define GM_NOREPLY      0xFF
 #define GM_EOF          136     /* buffer drained -- normal, not an error */
+#define GM_REJECTED     132     /* draft refused: bad header line / no recipient */
+#define GM_TOOBIG       162     /* draft exceeded the adapter's write cap */
 #define GM_DENIED       167
 #define GM_NOTFOUND     170
 #define GM_NOSERVICE    210
@@ -186,6 +195,86 @@ extern unsigned char gm_dev_ecode;  /* raw device code behind it, for diagnosis 
 extern const char   *gm_stage;      /* which step failed: open / status / read */
 
 /* ------------------------------------------------------------------ */
+/* Compose form                                                        */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Field capacities, excluding the NUL. The body is FRM_NBODY separate line
+ * fields on the same form engine as TO and SUBJECT -- there is no auto-wrap;
+ * Enter moves to the next line. Both body knobs are per-platform RAM/screen
+ * decisions and come from the Makefile.
+ */
+#ifndef FRM_NBODY
+#define FRM_NBODY       12      /* body lines on the form */
+#endif
+#ifndef FRM_BODY_COLS
+#define FRM_BODY_COLS   38      /* storage width of one body line */
+#endif
+#define FRM_TO_MAX      63
+#define FRM_SUBJ_MAX    63
+
+/* The emit/echo scratch must hold the longest emitted line -- a header, the
+   forward block's full-width original subject, or a body row (the form's
+   own or a forwarded gm_body one) -- plus the terminator, with the widest
+   echo window always narrower. */
+#define FRM_LMAX1   ((ENT_SUBJ_LEN > FRM_SUBJ_MAX) ? ENT_SUBJ_LEN : FRM_SUBJ_MAX)
+#define FRM_LMAX2   ((FRM_LMAX1 > FRM_BODY_COLS) ? FRM_LMAX1 : FRM_BODY_COLS)
+#define FRM_LMAX3   ((FRM_LMAX2 > BODY_COLS) ? FRM_LMAX2 : BODY_COLS)
+#define FRM_LINE_MAX (FRM_LMAX3 + 16)
+
+/* Field indices. Body lines are ordinary fields from F_BODY0 up. */
+#define F_TO        0
+#define F_SUBJ      1
+#define F_BODY0     2
+#define FRM_NFIELDS (2 + FRM_NBODY)
+
+/* Form modes. Reply and forward act on gm_index[gm_sel]. */
+#define FRM_COMPOSE 0
+#define FRM_REPLY   1
+#define FRM_FWD     2
+
+/*
+ * The form's storage: nothing but chars, so there is no padding to make
+ * form_field_ptr()'s arithmetic and the members drift. Deliberately plain
+ * BSS with no overlay trick: a forward reads gm_index[gm_sel] and every row
+ * of gm_body at emit time, so the form cannot borrow the body buffer the
+ * way the calendar client's does.
+ */
+struct frmbuf {
+    char to[FRM_TO_MAX + 1];
+    char subj[FRM_SUBJ_MAX + 1];
+    char body[FRM_NBODY][FRM_BODY_COLS + 1];
+    char line[FRM_LINE_MAX];    /* emit and echo scratch, shared */
+};
+
+extern struct frmbuf  frm;
+extern unsigned char  frm_dirty[FRM_NFIELDS];
+extern unsigned char  frm_mode;     /* FRM_*, set by form_init() */
+
+/* Form messages, drawn by ui_form_msg(). FM_NONE restores the normal hints. */
+#define FM_NONE     0
+#define FM_ASK      1           /* send? yes / no */
+#define FM_NEEDTO   2
+#define FM_NEEDBODY 3
+
+/* form.c -- the form model. Pure; tests/hosttest.c exercises all of it.
+   form_emit sends the draft one line at a time through gm_send_put() --
+   net.c's in the real program, the capture in the tests. Write failures are
+   gm_send_put's own to latch, and gm_send_end() is where they report. */
+void          form_init(unsigned char mode);
+char         *form_field_ptr(unsigned char f);
+unsigned char form_field_max(unsigned char f);
+unsigned char form_any_dirty(void);
+unsigned char form_validate(unsigned char *bad);
+void          form_emit(void);
+
+/* compose.c -- the form screen. Reply and forward act on gm_index[gm_sel];
+   the caller repaints its own screen afterwards either way. */
+void          compose_new(void);
+void          compose_reply(void);
+void          compose_forward(void);
+
+/* ------------------------------------------------------------------ */
 /* Portable services                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -211,6 +300,15 @@ void          body_finish(void);
 unsigned char gm_fetch_index(unsigned long range);
 unsigned char gm_fetch_body(const char *msgnum);
 void          gm_calc_next(void);
+
+/* net.c -- the draft channel. begin opens it (a reply open is where the
+   target is resolved), gm_send_put() writes the draft lines into it, end
+   closes -- which is what commits -- and reads the verdict, a latched write
+   failure included. gm_send_room() is what is left of the adapter's cap. */
+unsigned char gm_send_begin(unsigned char reply, const char *msgnum);
+void          gm_send_put(const char *line);
+unsigned int  gm_send_room(void);
+unsigned char gm_send_end(void);
 
 /* date.c -- render a wire timestamp into ENT_DATE_LEN bytes as "Aug 28 14:32",
    or "Aug 28  2024" for a message outside gm_year. Pure: no platform, no
@@ -240,7 +338,9 @@ void          hwm_update(const uint8_t *ts);        /* advance + persist if newe
 #define MSG_ROWS    18
 #endif
 
-/* Portable key codes returned by plat_getkey(). */
+/* Portable key codes returned by plat_getkey(). R returns K_REPLY from every
+   backend; the inbox loop folds it into K_REFRESH, so R still refreshes
+   there and only the reader treats it as reply. */
 #define K_NONE      0
 #define K_UP        1
 #define K_DOWN      2
@@ -250,6 +350,30 @@ void          hwm_update(const uint8_t *ts);        /* advance + persist if newe
 #define K_BACK      6
 #define K_REFRESH   7
 #define K_QUIT      8
+#define K_COMPOSE   9           /* C, inbox */
+#define K_REPLY     10          /* R, reader */
+#define K_FORWARD   11          /* F, reader */
+
+/*
+ * The form's key read. Printable ASCII $20-$7E passes through verbatim;
+ * everything with a meaning maps to an E_* code below $20, so the two can
+ * never collide. Blocks like plat_getkey(). The E_* values deliberately
+ * coincide with K_* 1-8 so one scripted fake-key stream can drive both
+ * loops.
+ *
+ * Not every backend can produce every code: a keyboard without cursor keys
+ * simply never sends E_LEFT, and the editor edits append-and-backspace there.
+ */
+#define E_ENTER     1           /* next field */
+#define E_UP        2
+#define E_DOWN      3
+#define E_LEFT      4
+#define E_RIGHT     5
+#define E_BS        6           /* delete before the cursor */
+#define E_DONE      7           /* leave the form (ESC / BREAK / SmartKey) */
+#define E_SAVE      8           /* send now, skipping the ask (Adam SmartKey) */
+
+unsigned char plat_getch(void);
 
 void          plat_init(void);
 void          plat_shutdown(void);
@@ -266,6 +390,7 @@ void          plat_anykey(void);        /* blocks until any key */
 /* Busy overlay reasons. */
 #define BUSY_INDEX  1
 #define BUSY_BODY   2
+#define BUSY_SEND   3
 
 void          ui_splash(void);
 void          ui_notfound(void);
@@ -274,5 +399,25 @@ void          ui_error(unsigned char code);
 void          ui_inbox(void);                   /* full repaint */
 void          ui_inbox_sel(unsigned char from, unsigned char to);
 void          ui_message(unsigned int top);     /* header + body window */
+void          ui_sent(void);                    /* flat "message sent" screen */
+
+/*
+ * The form screen. ui_form() paints the chrome -- title, field labels, the
+ * footer hints -- and nothing inside the fields; compose.c then draws every
+ * row through ui_form_row(), which is also how each keystroke is echoed.
+ *
+ * ui_form_row() gets the visible slice of the field already windowed --
+ * compose.c owns the horizontal scroll -- with curx the cursor's column
+ * within it, only meaningful while `active`. This is deliberately the one
+ * hook where the backends' inv-flag / attribute-role split lives.
+ *
+ * ui_form_width() reports how many text columns field f's window has, so the
+ * engine and the painter cannot disagree about where the scroll lands.
+ */
+void          ui_form(unsigned char mode);
+unsigned char ui_form_width(unsigned char f);
+void          ui_form_row(unsigned char f, const char *win,
+                          unsigned char curx, unsigned char active);
+void          ui_form_msg(unsigned char msg);
 
 #endif /* GMAIL_H */

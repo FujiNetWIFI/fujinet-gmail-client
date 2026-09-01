@@ -1,11 +1,12 @@
 /*
  * FujiNet Gmail client.
  *
- * A read-only inbox browser. There is no authentication anywhere in this
- * program: the FujiNet GMAIL adapter uses the Google grant stored in FujiNet
- * config, the user authorizes once in the FujiNet Web UI, and the firmware
- * handles token refresh. The console never sees a credential -- a 212 back
- * from a fetch simply means "not authorized yet".
+ * An inbox browser that can also compose, reply and forward. There is no
+ * authentication anywhere in this program: the FujiNet GMAIL adapter uses
+ * the Google grant stored in FujiNet config, the user authorizes once in
+ * the FujiNet Web UI, and the firmware handles token refresh. The console
+ * never sees a credential -- a 212 back from a fetch simply means "not
+ * authorized yet".
  *
  * Ported from the IntyBASIC original in intv/.
  */
@@ -91,6 +92,18 @@ static void read_message(void)
                     msg_top = maxtop;   /* the last page sits flush */
                 ui_message(msg_top);
             }
+            break;
+
+        case K_REPLY:
+            /* gm_body stays intact under the form -- it is what a forward
+               emits -- so the repaint afterwards needs no refetch. */
+            compose_reply();
+            ui_message(msg_top);
+            break;
+
+        case K_FORWARD:
+            compose_forward();
+            ui_message(msg_top);
             break;
 
         case K_BACK:
@@ -185,9 +198,18 @@ int main(void)
                 }
                 break;
 
-            case K_REFRESH:
+            case K_REPLY:               /* R replies in the reader only -- */
+            case K_REFRESH:             /* here it is still refresh */
                 gm_range = 0;
                 refetch = 1;
+                break;
+
+            case K_COMPOSE:
+                /* A compose needs nothing from the listing, so it works
+                   from an empty inbox too; nothing it sends can appear in
+                   INBOX, so the repaint needs no refetch either. */
+                compose_new();
+                ui_inbox();
                 break;
 
             case K_ENTER:

@@ -56,7 +56,10 @@ static unsigned char map(unsigned char c)
     case CH_ENTER:                  return K_ENTER;
     case CH_ESC:                    return K_BACK;
 
-    case 'r': case 'R':             return K_REFRESH;
+    /* R is K_REPLY everywhere; the inbox folds it into refresh. */
+    case 'r': case 'R':             return K_REPLY;
+    case 'c': case 'C':             return K_COMPOSE;
+    case 'f': case 'F':             return K_FORWARD;
     case 'q': case 'Q':             return K_QUIT;
     }
 
@@ -91,4 +94,40 @@ void plat_anykey(void)
 {
     while (!rawkey())
         ;
+}
+
+/*
+ * The compose form's read. DELETE ($7F) erases; the left arrow ($08) moves
+ * the cursor, which is what it does in every Apple editor -- erasing is
+ * what it means in BASIC, but this machine has a DELETE key and BASIC does
+ * not get a vote on a form. Busy-polls like plat_getkey(), and for the
+ * same reason: nothing else here needs the frame to turn.
+ */
+unsigned char plat_getch(void)
+{
+    unsigned char c;
+
+#ifdef GM_FAKE_KEYS
+    /* Spent verbatim: the scripted K_* codes' low values land on E_* inside
+       the form, which is what lets a capture drive the field cursor. */
+    if (fake_idx < sizeof(fake_keys))
+        return fake_keys[fake_idx++];
+#endif
+
+    for (;;) {
+        c = rawkey();
+        if (c) {
+            switch (c) {
+            case CH_CURS_UP:        return E_UP;
+            case CH_CURS_DOWN:      return E_DOWN;
+            case CH_CURS_LEFT:      return E_LEFT;
+            case CH_CURS_RIGHT:     return E_RIGHT;
+            case CH_ENTER:          return E_ENTER;
+            case CH_ESC:            return E_DONE;
+            case 0x7F:              return E_BS;
+            }
+            if (c >= 0x20 && c < 0x7F)
+                return c;
+        }
+    }
 }

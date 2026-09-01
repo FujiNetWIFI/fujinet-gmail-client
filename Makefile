@@ -78,9 +78,14 @@ FUJINET_LIB = /home/thomc/Workspace/fujinet-lib/build
 # overruns the buffer and drops the surplus from the stream. GM_PKT tells
 # src/net.c to stage the listing in packets, and GM_RXBUF has to be at least as
 # large so a body read takes a whole one; net.c refuses to compile otherwise.
+# FRM_NBODY x FRM_BODY_COLS is the compose form's body: twelve full-width
+# lines. Unlike gm_body it cannot ride on an overlay -- a forward reads
+# gm_body while the form is up -- but at 33 bytes a line the whole frmbuf is
+# ~600 bytes, well inside the spare noted above.
 CFLAGS_EXTRA_ADAM  = -DBUILD_ADAM -Os
 CFLAGS_EXTRA_ADAM += -DMSG_ROWS=17
 CFLAGS_EXTRA_ADAM += -DBODY_COLS=32 -DBODY_ROWS=320 -DENT_SUBJ_LEN=48
+CFLAGS_EXTRA_ADAM += -DFRM_NBODY=12 -DFRM_BODY_COLS=32
 CFLAGS_EXTRA_ADAM += -DGM_PKT=1024 -DGM_RXBUF=1024
 
 # tools/adam-shot.sh appends -DGM_FAKE_DATA / -DGM_FAKE_KEYS through here, for
@@ -120,8 +125,14 @@ LDFLAGS_EXTRA_ATARI += --mapfile r2r/atari/gmail.map
 # though the buffer grows: at 78 columns a message needs roughly half the rows
 # it does at 40, so 240 rows of 78 holds 18,720 characters against the Atari's
 # 300 rows of 40 = 12,000.
-CFLAGS_EXTRA_APPLE2ENH  = -DBODY_COLS=78 -DBODY_ROWS=240 -DLINE_CAP=256
+# FRM_BODY_COLS stays two under the 78-column window so a full body line
+# still leaves the cursor a cell and the row a margin. The whole frmbuf is
+# ~1.35K, and BODY_ROWS pays for it: at 240 the compose build overflowed BSS
+# by 346 bytes, so the body gives back eight rows (632 bytes) -- 232 rows is
+# still eleven and a half pages of a message.
+CFLAGS_EXTRA_APPLE2ENH  = -DBODY_COLS=78 -DBODY_ROWS=232 -DLINE_CAP=256
 CFLAGS_EXTRA_APPLE2ENH += -DENT_SUBJ_LEN=128 -DMSG_ROWS=20
+CFLAGS_EXTRA_APPLE2ENH += -DFRM_NBODY=14 -DFRM_BODY_COLS=76
 
 # apple2enh.cfg presumes RAM ends at $9600, leaving room for the ProDOS file
 # buffers this client never opens -- fujinet-lib talks SmartPort directly and
@@ -154,9 +165,22 @@ LDFLAGS_EXTRA_APPLE2ENH += --mapfile r2r/apple2enh/gmail.map
 # program_end` in r2r/coco/gmail.map against the $7C00 ceiling for BOTH
 # variants: a -DGM_FAKE_DATA build links the canned wire data alongside the real
 # transport, so it is about 1.8K larger and it is the one that runs out first.
-# At 288 the shipped build has ~3.4K spare and the capture harness ~1.7K; at 320
-# the harness was down to 641 bytes, which would have meant the next string
-# added to a screen breaking tools/coco-shot.sh while the product still fitted.
+# At 320 the harness was down to 641 bytes, which would have meant the next
+# string added to a screen breaking tools/coco-shot.sh while the product still
+# fitted.
+#
+# BODY_ROWS came down from 288 to 208 when the compose form arrived: the form
+# engine, the send path and their screens are ~2.6K of 6809 code and this is
+# the machine with none to spare, so the body gives back 80 rows (2,640 bytes)
+# to pay for it. At 240 the capture harness overflowed by 521 bytes, and 224
+# would have left it 7 -- one string from breaking again -- so 208 it is,
+# which is still seventeen pages of a message and leaves the harness ~535 and
+# the product ~2K. The next rungs down are 192, then FRM_NBODY 6 -> 5.
+#
+# FRM_NBODY x FRM_BODY_COLS is the compose form's body: six full-width lines,
+# which is what a 16-row screen can show under two header fields. The frmbuf
+# is ~400 bytes and cannot overlay gm_body -- a forward reads it while the
+# form is up.
 #
 # LINE_CAP is deliberately NOT lowered to match the narrower screen. It is the
 # raw wire line accumulator, not a display width, and a line longer than it gets
@@ -164,7 +188,8 @@ LDFLAGS_EXTRA_APPLE2ENH += --mapfile r2r/apple2enh/gmail.map
 # row in the middle of a paragraph. Six and a quarter rows of slack at 32
 # columns is the same 200 bytes the Atari spends for five.
 CFLAGS_EXTRA_COCO  = -DIDX_MAX=11 -DMSG_ROWS=12
-CFLAGS_EXTRA_COCO += -DBODY_COLS=32 -DBODY_ROWS=288
+CFLAGS_EXTRA_COCO += -DBODY_COLS=32 -DBODY_ROWS=208
+CFLAGS_EXTRA_COCO += -DFRM_NBODY=6 -DFRM_BODY_COLS=32
 CFLAGS_EXTRA_COCO += -DENT_SUBJ_LEN=48 -DGM_RXBUF=256
 
 CFLAGS_EXTRA_COCO += -fomit-frame-pointer
@@ -243,8 +268,12 @@ LDFLAGS_EXTRA_COCO += --no-relocate -i
 # transactions, and DGROUP has the room.
 #
 # -os is optimise-for-size; wcc's default is no optimisation at all.
+# The compose form stores 76-column body lines -- the 80-column shape -- and
+# windows them narrower at runtime when the machine booted in 40 columns,
+# exactly the GM_RT_COLS trade the body buffer makes. ~1.1K of DGROUP.
 CFLAGS_EXTRA_MSDOS  = -os -DGM_RT_COLS -DMSG_ROWS=21
 CFLAGS_EXTRA_MSDOS += -DBODY_COLS=78 -DBODY_ROWS=400 -DLINE_CAP=256
+CFLAGS_EXTRA_MSDOS += -DFRM_NBODY=14 -DFRM_BODY_COLS=76
 CFLAGS_EXTRA_MSDOS += -DENT_SUBJ_LEN=128 -DGM_RXBUF=1024
 
 # tools/msdos-shot.sh appends -DGM_FAKE_DATA / -DGM_FAKE_KEYS through here,

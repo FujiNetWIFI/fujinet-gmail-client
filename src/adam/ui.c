@@ -76,18 +76,31 @@ static char datebuf[ENT_DATE_LEN];
  * over its neighbour's slot. Every label here has been measured against
  * smartkeys_font[]; "Refresh" is the widest at 32 of its 40 pixels.
  *
- * Slot V is left NULL on every screen. A NULL slot is painted as yellow status
- * rather than as a keycap, which gives the band somewhere to breathe and marks
- * the two halves -- move and page on the left, act and leave on the right.
+ * The inbox spends slot V on "New" now that there is a compose to start;
+ * the reader trades its Up/Down slots -- redundant with the arrow keys --
+ * for Reply and Fwd, and keeps slot V NULL. A NULL slot is painted as
+ * yellow status rather than as a keycap, which gives a band somewhere to
+ * breathe where a screen can still afford it.
  */
 static const struct sk_set sk_inbox = {
-    { "Read", "Prev Pg", "Next Pg", "Refresh", 0, "Quit" },
-    { K_ENTER, K_LEFT, K_RIGHT, K_REFRESH, K_NONE, K_QUIT }
+    { "Read", "Prev Pg", "Next Pg", "Refresh", "New", "Quit" },
+    { K_ENTER, K_LEFT, K_RIGHT, K_REFRESH, K_COMPOSE, K_QUIT }
 };
 
 static const struct sk_set sk_reader = {
-    { "Pg Up", "Pg Dn", "Up", "Down", 0, "Back" },
-    { K_LEFT, K_RIGHT, K_UP, K_DOWN, K_NONE, K_BACK }
+    { "Pg Up", "Pg Dn", "Reply", "Fwd", 0, "Back" },
+    { K_LEFT, K_RIGHT, K_REPLY, K_FORWARD, K_NONE, K_BACK }
+};
+
+/*
+ * The compose form's bank carries E_* editor codes, not K_* ones --
+ * plat_getch() reads the same sk_key[] table sk_bind() fills, so the band
+ * works in the form without any second mechanism. "Send" skips the
+ * send-or-discard ask that "Done" poses when something was typed.
+ */
+static const struct sk_set sk_form = {
+    { "Up", "Down", 0, 0, "Send", "Done" },
+    { E_UP, E_DOWN, K_NONE, K_NONE, E_SAVE, E_DONE }
 };
 
 /* The flat screens all end in plat_anykey(), which takes anything at all, so
@@ -129,9 +142,17 @@ void ui_busy(unsigned char reason)
     if (reason == BUSY_INDEX) {
         scr_center(FLAT_HEAD, "Opening mailbox...", A_BODY);
         scr_center(FLAT_BODY, "Up to 60 seconds", A_DIM);
+    } else if (reason == BUSY_SEND) {
+        scr_center(FLAT_HEAD, "Sending message...", A_BODY);
     } else {
         scr_center(FLAT_HEAD, "Fetching message...", A_BODY);
     }
+}
+
+void ui_sent(void)
+{
+    flat_screen();
+    scr_center(FLAT_HEAD, "Message sent", A_BODY);
 }
 
 void ui_error(unsigned char code)
@@ -150,6 +171,13 @@ void ui_error(unsigned char code)
         break;
     case GM_NOTFOUND:
         l1 = "Message not found";
+        break;
+    case GM_REJECTED:
+        l1 = "Draft rejected";
+        l2 = "Check the address";
+        break;
+    case GM_TOOBIG:
+        l1 = "Message too large";
         break;
     case GM_NOSERVICE:
         l1 = "Service unavailable";
@@ -417,4 +445,98 @@ void ui_message(unsigned int top)
     scr_right(MSG_RULE_ROW, RIGHT_COL, sbuf, A_RULE);
 
     sk_bind(&sk_reader);
+}
+
+/* ------------------------------------------------------------------ */
+/* Compose form                                                        */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The inbox's arrangement: the red app bar with the mode title, the rule
+ * under it, gray captions beside black values, and the SmartKeys carrying
+ * the actions -- sk_form's slots hold E_* codes, which is the whole trick.
+ * The active field is the selection bar with the cursor cell knocked back
+ * to the body attribute, a hole in the bar; scr_attr() can repaint that
+ * one cell without touching the glyph under it, which no other backend
+ * can. Rows 21-23 stay smartkeyslib's, as everywhere.
+ */
+
+#define FRM_BODY_TOP    6
+#define FRM_HINT_ROW    (FRM_BODY_TOP + FRM_NBODY + 1)
+#define FRM_MSG_ROW     (FRM_HINT_ROW + 1)
+#define FRM_HDR_COL     3       /* TO/SUBJECT value column */
+#define FRM_HDR_W       29      /* their window: cols 3..31 */
+
+#if FRM_MSG_ROW > 20
+#error "the form no longer fits above the SmartKeys band -- lower FRM_NBODY"
+#endif
+
+static unsigned char frm_row(unsigned char f)
+{
+    if (f == F_TO)
+        return 3;
+    if (f == F_SUBJ)
+        return 4;
+    return (unsigned char) (FRM_BODY_TOP + (f - F_BODY0));
+}
+
+static unsigned char frm_col(unsigned char f)
+{
+    return (unsigned char) ((f >= F_BODY0) ? 0 : FRM_HDR_COL);
+}
+
+unsigned char ui_form_width(unsigned char f)
+{
+    return (unsigned char) ((f >= F_BODY0) ? SCR_COLS : FRM_HDR_W);
+}
+
+void ui_form(unsigned char mode)
+{
+    scr_clear();
+    sk_bind(&sk_form);
+
+    scr_field(0, 0, "", SCR_COLS, A_HEADER);
+    scr_field(1, 0, "", SCR_COLS, A_HEADER);
+    logo_small(LOGO_ROW, LOGO_COL);
+    scr_text(0, HDR_TEXT_COL, "Gmail", A_HEADER);
+    scr_right(0, RIGHT_COL, (mode == FRM_REPLY) ? "Reply"
+                          : (mode == FRM_FWD)   ? "Forward"
+                                                : "New", A_HDR_DIM);
+
+    scr_field(RULE_ROW, 0, "", SCR_COLS, A_RULE);
+
+    scr_text(3, 0, "To", A_DIM);
+    scr_text(4, 0, "Su", A_DIM);
+
+    if (mode == FRM_REPLY)
+        scr_text(FRM_HINT_ROW, 0, "Blank To/Su = reply defaults", A_DIM);
+}
+
+void ui_form_row(unsigned char f, const char *win, unsigned char curx,
+                 unsigned char active)
+{
+    unsigned char row = frm_row(f);
+    unsigned char col = frm_col(f);
+
+    scr_field(row, col, win, ui_form_width(f),
+              (unsigned char) (active ? A_SEL : A_BODY));
+
+    if (active)
+        scr_attr(row, (unsigned char) (col + curx), 1, A_BODY);
+}
+
+void ui_form_msg(unsigned char msg)
+{
+    const char *s;
+
+    scr_row_clear(FRM_MSG_ROW);
+
+    switch (msg) {
+    case FM_ASK:      s = "Send? (Y/N)";       break;
+    case FM_NEEDTO:   s = "To is required";    break;
+    case FM_NEEDBODY: s = "A body is required"; break;
+    default:          return;                 /* FM_NONE: cleared above */
+    }
+
+    scr_field(FRM_MSG_ROW, 0, s, SCR_COLS, A_SEL);
 }

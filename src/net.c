@@ -7,10 +7,12 @@
  * the firmware handles token refresh. A 212 back from an open just means
  * "not authorized yet".
  *
- * Two device specs, both handled by the adapter's Mailbox protocol:
+ * Four device specs, all handled by the adapter's Mailbox protocol:
  *
  *   N:GMAIL:///INBOX?range=<start>-<end>   aux1 = 6 (DIRECTORY), aux2 = 255 (raw)
  *   N:GMAIL:///INBOX/<msgnum>              aux1 = 4 (READ),      aux2 = 3   (CRLF)
+ *   N:GMAIL:///                            aux1 = 8 (WRITE)      -> compose
+ *   N:GMAIL:///INBOX/<msgnum>              aux1 = 8 (WRITE)      -> reply
  *
  * Note the three slashes: GMAIL: + // (empty host) + /INBOX (path).
  */
@@ -446,6 +448,159 @@ unsigned char gm_fetch_body(const char *msgnum)
     network_close(url);
     plat_net_end();
     return 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* The draft channel                                                   */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A WRITE open stages nothing to read, so there is no settle() here -- and
+ * a write channel's status reports health, not drain state, so settling
+ * would be asking the wrong question anyway. The open is where a reply's
+ * /N is resolved (and can fail with 170). The commit happens at close, and
+ * the verdict is only learnable from the STATUS that follows it -- the
+ * adapter latches the close error precisely so that status can report it.
+ * gm_send_put() failures are remembered rather than acted on, because the
+ * channel still has to be closed and the close is where the failure gets
+ * reported from.
+ */
+
+static uint16_t      wr_total;
+#ifndef GM_FAKE_DATA
+static unsigned char wr_failed;
+#endif
+
+unsigned char gm_send_begin(unsigned char reply, const char *msgnum)
+{
+    wr_total = 0;
+
+#ifdef GM_FAKE_DATA
+    (void) reply;
+    (void) msgnum;
+    gm_ecode = 0;
+    return 1;
+#else
+    {
+    unsigned char code;
+
+    wr_failed = 0;
+
+    if (reply) {
+        /* Exactly the spec the body was fetched with: the adapter numbers
+           messages within the folder, and the target is snapshotted at
+           this open so renumbering underneath cannot retarget it. */
+        build_body_url(msgnum);
+    } else {
+        /* Compose is the bare scheme -- no folder, no message. */
+        strcpy(url, "N:GMAIL:///");
+    }
+
+    plat_net_begin();
+
+    /* A reply open fetches the target's headers upstream before it
+       answers, so it gets the same widened SIO timeout as a fetch. */
+    gm_stage = "open";
+    fn_default_timeout = TMO_LONG;
+    code = network_open(url, MB_MODE_WRITE, 0);
+    fn_default_timeout = TMO_NORM;
+
+    if (code != FN_ERR_OK) {
+        fail(open_error());
+        return 0;
+    }
+
+    return 1;
+    }
+#endif
+}
+
+void gm_send_put(const char *line)
+{
+    unsigned int len = (unsigned int) strlen(line);
+
+    /* Track the budget in every build: the forward truncation in form.c
+       reads it back through gm_send_room(), fake builds included. */
+    if (wr_total > (uint16_t) (GM_SEND_MAX - len)) {
+#ifndef GM_FAKE_DATA
+        /* Belt and braces -- form.c stops short of this. Tripping the
+           adapter's own cap would poison the draft, so drop the line here
+           and let the close report the failure instead. */
+        wr_failed = 1;
+#endif
+        return;
+    }
+    wr_total += (uint16_t) len;
+
+#ifndef GM_FAKE_DATA
+    gm_stage = "write";
+
+    if (network_write(url, (const uint8_t *) line,
+                      (uint16_t) len) != FN_ERR_OK) {
+        wr_failed = 1;
+        gm_dev_ecode = fn_device_error;
+    }
+#endif
+}
+
+unsigned int gm_send_room(void)
+{
+    return (unsigned int) (GM_SEND_MAX - wr_total);
+}
+
+unsigned char gm_send_end(void)
+{
+#ifdef GM_FAKE_DATA
+#ifdef GM_FAKE_SEND_FAIL
+    /* Photograph the failure path: the error screen, and the return to the
+       form with every field intact behind it. */
+    gm_stage = "send";
+    gm_ecode = GM_FAKE_SEND_FAIL;
+    return 0;
+#else
+    gm_ecode = 0;
+    return 1;
+#endif
+#else
+    gm_stage = "send";
+
+    /* The close is the commit: the adapter builds the RFC822 message and
+       runs the upstream send synchronously before acking, so it needs the
+       widened SIO timeout just as much as the open did. */
+    fn_default_timeout = TMO_LONG;
+    network_close(url);
+    fn_default_timeout = TMO_NORM;
+
+    if (wr_failed) {
+        /* Part of the draft never reached the adapter. Whatever the close
+           just committed -- most likely a rejection for a half-sent draft
+           -- the message composed here is not what went out. */
+        plat_net_end();
+        gm_ecode = 0;
+        return 0;
+    }
+
+#if defined(__APPLE2ENH__)
+    /* The IWM bus layer does not latch the commit verdict into the STATUS
+       that follows a close, so there is nothing useful to ask. Report the
+       send optimistically; README carries the caveat. */
+    plat_net_end();
+    return 1;
+#else
+    {
+        unsigned char code = probe();
+
+        plat_net_end();
+
+        if (!st_ok(code)) {
+            gm_ecode = (unsigned char) ((code == GM_NOREPLY) ? 0 : code);
+            return 0;
+        }
+    }
+
+    return 1;
+#endif
+#endif
 }
 
 /* ------------------------------------------------------------------ */

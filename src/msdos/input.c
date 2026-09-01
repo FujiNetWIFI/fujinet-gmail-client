@@ -37,10 +37,14 @@
  * The second spelling is this compiler's own problem: wcc cannot carry a
  * comma through -D -- everything after it is parsed as another file to
  * compile, E1139 -- so a *sequence* has to arrive without one.
- * GM_FAKE_KEYS_STR is the K_* codes as a string of digits ('2' is K_DOWN),
- * which rides through the same escaped-quote path GIT_VERSION already
- * proves out. tools/msdos-shot.sh does the translation, so nobody types
- * digits by hand.
+ * GM_FAKE_KEYS_STR is the codes as a string: '0' + code, so '2' is K_DOWN
+ * and ';' is K_FORWARD -- the code space reserves '0' through '?', sixteen
+ * values. Anything at '@' or above passes through verbatim,
+ * which is how a capture script types text into the form -- letters and
+ * '@' are exactly what an address needs, and the reserved sixteen cost it
+ * only the digits. It rides through the same escaped-quote path
+ * GIT_VERSION already proves out; tools/msdos-shot.sh does the
+ * translation, so nobody types the codes by hand.
  */
 #ifdef GM_FAKE_KEYS
 static const unsigned char fake_keys[] = { GM_FAKE_KEYS };
@@ -48,6 +52,22 @@ static unsigned char fake_idx;
 #elif defined(GM_FAKE_KEYS_STR)
 static const char fake_keys[] = GM_FAKE_KEYS_STR;
 static unsigned char fake_idx;
+#endif
+
+#if defined(GM_FAKE_KEYS) || defined(GM_FAKE_KEYS_STR)
+static unsigned char fake_next(void)
+{
+#ifdef GM_FAKE_KEYS
+    if (fake_idx < sizeof(fake_keys))
+        return fake_keys[fake_idx++];
+#else
+    if (fake_keys[fake_idx]) {
+        unsigned char c = (unsigned char) fake_keys[fake_idx++];
+        return (unsigned char) ((c >= '0' && c <= '?') ? (c - '0') : c);
+    }
+#endif
+    return K_NONE;
+}
 #endif
 
 #define SC_UP       0x48
@@ -87,7 +107,11 @@ static unsigned char map(unsigned int ax)
     switch (al) {
     case 0x0D:                      return K_ENTER;
     case 0x1B:                      return K_BACK;
-    case 'r': case 'R':             return K_REFRESH;
+
+    /* R is K_REPLY everywhere and the inbox folds it into refresh. */
+    case 'r': case 'R':             return K_REPLY;
+    case 'c': case 'C':             return K_COMPOSE;
+    case 'f': case 'F':             return K_FORWARD;
     case 'q': case 'Q':             return K_QUIT;
     }
 
@@ -104,12 +128,12 @@ static unsigned char map(unsigned int ax)
  */
 unsigned char plat_getkey(void)
 {
-#ifdef GM_FAKE_KEYS
-    if (fake_idx < sizeof(fake_keys))
-        return fake_keys[fake_idx++];
-#elif defined(GM_FAKE_KEYS_STR)
-    if (fake_keys[fake_idx])
-        return (unsigned char) (fake_keys[fake_idx++] - '0');
+#if defined(GM_FAKE_KEYS) || defined(GM_FAKE_KEYS_STR)
+    {
+        unsigned char k = fake_next();
+        if (k != K_NONE)
+            return k;
+    }
 #endif
 
 #ifdef GM_SHOT
@@ -133,4 +157,60 @@ void plat_anykey(void)
     exit(0);
 #endif
     rawkey();
+}
+
+/*
+ * The compose form's read: printable ASCII through verbatim, editing keys
+ * as E_* codes. Tab joins RETURN as next-field because that is what a DOS
+ * user's fingers do in any form. Backspace is the BIOS's 0x08.
+ */
+static unsigned char mapch(unsigned int ax)
+{
+    unsigned char al = (unsigned char) (ax & 0xFF);
+
+    if (al == 0x00 || al == 0xE0) {
+        switch ((unsigned char) (ax >> 8)) {
+        case SC_UP:                 return E_UP;
+        case SC_DOWN:               return E_DOWN;
+        case SC_LEFT:               return E_LEFT;
+        case SC_RIGHT:              return E_RIGHT;
+        }
+        return 0;
+    }
+
+    switch (al) {
+    case 0x0D:                      return E_ENTER;
+    case 0x09:                      return E_ENTER;
+    case 0x1B:                      return E_DONE;
+    case 0x08:                      return E_BS;
+    }
+
+    if (al >= 0x20 && al < 0x7F)
+        return al;
+
+    return 0;
+}
+
+unsigned char plat_getch(void)
+{
+#if defined(GM_FAKE_KEYS) || defined(GM_FAKE_KEYS_STR)
+    /* Spent verbatim: the scripted codes' low values land on E_* inside
+       the form, which is what lets a capture drive the field cursor. */
+    {
+        unsigned char k = fake_next();
+        if (k != K_NONE)
+            return k;
+    }
+#endif
+
+#ifdef GM_SHOT
+    scr_snapshot();
+    exit(0);
+#endif
+
+    for (;;) {
+        unsigned char c = mapch(rawkey());
+        if (c)
+            return c;
+    }
 }

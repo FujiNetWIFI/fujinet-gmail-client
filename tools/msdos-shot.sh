@@ -53,14 +53,24 @@ fi
 # GIT_VERSION does.
 FLAGS="-DGM_FAKE_DATA -DGM_SHOT"
 if [ -n "$KEYS" ]; then
+    # K_* and E_* names become '0'+code -- the two prefixes never collide,
+    # and the E_* values deliberately coincide with K_* 1-8 (src/gmail.h).
+    # A bare letter or '@' passes through and is typed into the compose form
+    # verbatim; see the decode in src/msdos/input.c.
     DIGITS=$(printf '%s' "$KEYS" | sed \
         -e 's/K_UP/1/g'    -e 's/K_DOWN/2/g'    \
         -e 's/K_LEFT/3/g'  -e 's/K_RIGHT/4/g'   \
         -e 's/K_ENTER/5/g' -e 's/K_BACK/6/g'    \
         -e 's/K_REFRESH/7/g' -e 's/K_QUIT/8/g'  \
+        -e 's/K_COMPOSE/9/g' -e 's/K_REPLY/:/g' \
+        -e 's/K_FORWARD/;/g'                    \
+        -e 's/E_ENTER/1/g' -e 's/E_UP/2/g'      \
+        -e 's/E_DOWN/3/g'  -e 's/E_LEFT/4/g'    \
+        -e 's/E_RIGHT/5/g' -e 's/E_BS/6/g'      \
+        -e 's/E_DONE/7/g'  -e 's/E_SAVE/8/g'    \
         -e 's/[ ,]//g')
     case "$DIGITS" in
-        *[!1-8]*) echo "unrecognised key in \"$KEYS\"" >&2; exit 1 ;;
+        *[!1-9:\;@A-Za-z]*) echo "unrecognised key in \"$KEYS\"" >&2; exit 1 ;;
     esac
     FLAGS="$FLAGS -DGM_FAKE_KEYS_STR=\\\"$DIGITS\\\""
 fi

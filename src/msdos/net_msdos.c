@@ -38,6 +38,10 @@
  * Replaced with one exact-length 'R': net.c never asks for more than status
  * said is staged and probes between chunks itself.
  *
+ * network_write(): the same DH=5 shape as the read -- the length as one u16
+ * param -- with the draft bytes as the write payload. The library's DH=0
+ * version NAKs exactly the way the open did.
+ *
  * network_error(): returns the device's code, never 0 for a failed call.
  */
 
@@ -133,4 +137,20 @@ int16_t network_read(const char *devicespec, uint8_t *buf, uint16_t len)
         return -FN_ERR_IO_ERROR;
 
     return (int16_t) len;
+}
+
+uint8_t network_write(const char *devicespec, const uint8_t *buf, uint16_t len)
+{
+    unsigned char device = (unsigned char) (0x70 + network_unit(devicespec));
+
+    if (len == 0 || buf == 0)
+        return FN_ERR_BAD_CMD;
+
+    if (int_f5x(F5_WRITE, FD_1xU16, device, 'W',
+                (unsigned char) (len & 0xFF),
+                (unsigned char) (len >> 8),
+                (void *) buf, len) != 'C')
+        return network_error(devicespec);
+
+    return FN_ERR_OK;
 }

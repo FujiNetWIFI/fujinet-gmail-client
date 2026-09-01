@@ -122,9 +122,18 @@ void ui_busy(unsigned char reason)
     if (reason == BUSY_INDEX) {
         scr_center(13, "Opening mailbox...", A_TEXT);
         scr_center(15, "up to 60 seconds", A_TEXT);
+    } else if (reason == BUSY_SEND) {
+        scr_center(13, "Sending message...", A_TEXT);
     } else {
         scr_center(13, "Fetching message...", A_TEXT);
     }
+}
+
+void ui_sent(void)
+{
+    flat_screen();
+    scr_center(13, "Message sent", A_TEXT);
+    scr_center(17, "PRESS ANY KEY", A_TEXT);
 }
 
 void ui_error(unsigned char code)
@@ -144,11 +153,18 @@ void ui_error(unsigned char code)
         break;
     case GM_DENIED:
         l1 = "Google access denied";
-        l2 = scr_wide ? "re-authorize -- the grant needs gmail.readonly"
+        l2 = scr_wide ? "re-authorize in the Web UI -- the grant is missing a scope"
                       : "re-authorize (scope)";
         break;
     case GM_NOTFOUND:
         l1 = "Message not found";
+        break;
+    case GM_REJECTED:
+        l1 = "Draft rejected";
+        l2 = "check the address";
+        break;
+    case GM_TOOBIG:
+        l1 = "Message too large";
         break;
     case GM_NOSERVICE:
         l1 = "Service unavailable";
@@ -328,8 +344,8 @@ void ui_inbox(void)
 
     footer(scr_wide
            ? "RET:READ   " GL_UP GL_DOWN ":MOVE   " GL_LEFT GL_RIGHT
-             ":PAGE   R:REFRESH   Q:QUIT"
-           : "RET:READ " GL_LEFT GL_RIGHT ":PAGE R:REFRESH Q:QUIT",
+             ":PAGE   C:COMPOSE   R:REFRESH   Q:QUIT"
+           : "RET:READ " GL_LEFT GL_RIGHT ":PG C:NEW R:REFR Q:QUIT",
            0);
 }
 
@@ -406,8 +422,127 @@ void ui_message(unsigned int top)
         strcat(sbuf, "+");
 
     footer(scr_wide
-           ? GL_UP GL_DOWN ":LINE   " GL_LEFT GL_RIGHT
-             ":PAGE   PGUP/PGDN   ESC:BACK"
-           : GL_UP GL_DOWN ":LINE " GL_LEFT GL_RIGHT ":PAGE ESC:BACK",
+           ? "R:REPLY   F:FORWARD   " GL_UP GL_DOWN ":LINE   "
+             GL_LEFT GL_RIGHT ":PAGE   ESC:BACK"
+           : GL_UP GL_DOWN ":LN " GL_LEFT GL_RIGHT ":PG R:RPLY F:FWD ESC:BK",
            sbuf);
+}
+
+/* ------------------------------------------------------------------ */
+/* Compose form                                                        */
+/* ------------------------------------------------------------------ */
+
+/*
+ * One form serves both widths, the way every other screen here does: the
+ * geometry comes off scr_cols, and only the label spelling and the footer
+ * wording branch on scr_wide. The body lines store the 80-column shape and
+ * window narrower at 40 -- the engine's horizontal scroll owns the
+ * difference, exactly the GM_RT_COLS trade gm_body makes. The active field
+ * is an A_SEL bar with the cursor cell knocked back to A_TEXT -- a hole in
+ * the bar -- which reads on all three attribute tables, the MDA included.
+ */
+
+#define FRM_BODY_TOP    6
+#define FRM_RULE_ROW    5
+#define FRM_HINT_ROW    (FRM_BODY_TOP + FRM_NBODY + 1)
+#define FRM_MSG_ROW     (FRM_HINT_ROW + 1)
+
+#if FRM_MSG_ROW >= FOOT_ROW
+#error "the form no longer fits above the footer -- lower FRM_NBODY"
+#endif
+
+static unsigned char frm_valcol(void)
+{
+    return (unsigned char) (scr_wide ? 10 : 6);
+}
+
+static unsigned char frm_row(unsigned char f)
+{
+    if (f == F_TO)
+        return 3;
+    if (f == F_SUBJ)
+        return 4;
+    return (unsigned char) (FRM_BODY_TOP + (f - F_BODY0));
+}
+
+static unsigned char frm_col(unsigned char f)
+{
+    return (f >= F_BODY0) ? 1 : frm_valcol();
+}
+
+/* Windows capped at one cell past their storage, so the cursor can sit
+   past a full value; at 40 columns the screen is the cap and the engine
+   scrolls the rest into view. */
+unsigned char ui_form_width(unsigned char f)
+{
+    unsigned char room = (unsigned char) (scr_cols - frm_col(f) - 1);
+    unsigned char most = (unsigned char)
+        ((f >= F_BODY0) ? (FRM_BODY_COLS + 1) : (FRM_TO_MAX + 1));
+
+    return (room < most) ? room : most;
+}
+
+void ui_form(unsigned char mode)
+{
+    const char *title = (mode == FRM_REPLY) ? "Reply"
+                      : (mode == FRM_FWD)   ? "Forward"
+                                            : "New message";
+
+    scr_clear();
+
+    scr_field(0, 0, "", scr_cols, A_BAR);       /* the app bar */
+    if (scr_wide) {
+        logo_small(0, 1);
+        scr_text(0, 8, "Gmail", A_BAR);
+        scr_text(0, 16, title, A_BAR);
+    } else {
+        scr_text(0, 2, "Gmail  ", A_BAR);
+        scr_text(0, 9, title, A_BAR);
+    }
+
+    scr_text(3, 2, "To", A_TEXT);
+    scr_text(4, 2, scr_wide ? "Subject" : "Sub", A_TEXT);
+    scr_fill(FRM_RULE_ROW, 1, GL_RULE, (unsigned char) (scr_cols - 2),
+             A_TEXT);
+
+    if (mode == FRM_REPLY)
+        scr_text(FRM_HINT_ROW, 2, scr_wide
+                 ? "Blank To and Subject take the reply defaults"
+                 : "Blank To/Sub = reply defaults", A_TEXT);
+
+    footer(scr_wide
+           ? "TAB/RET:NEXT   " GL_UP GL_DOWN ":FIELD   "
+             GL_LEFT GL_RIGHT ":CURSOR   ESC:DONE"
+           : "RET:NEXT " GL_UP GL_DOWN ":FIELD ESC:DONE", 0);
+}
+
+void ui_form_row(unsigned char f, const char *win, unsigned char curx,
+                 unsigned char active)
+{
+    unsigned char row = frm_row(f);
+    unsigned char col = frm_col(f);
+
+    scr_field(row, col, win, ui_form_width(f),
+              (unsigned char) (active ? A_SEL : A_TEXT));
+
+    if (active)
+        scr_cell(row, (unsigned char) (col + curx),
+                 curx < strlen(win) ? (unsigned char) win[curx] : ' ',
+                 scr_attr_byte(A_TEXT));
+}
+
+void ui_form_msg(unsigned char msg)
+{
+    const char *s;
+
+    scr_row_clear(FRM_MSG_ROW);
+
+    switch (msg) {
+    case FM_ASK:      s = "Send message? (Y/N)";     break;
+    case FM_NEEDTO:   s = "A recipient is required"; break;
+    case FM_NEEDBODY: s = "A message is required";   break;
+    default:          return;                   /* FM_NONE: cleared above */
+    }
+
+    scr_center(FRM_MSG_ROW, s, A_EMPH);
 }

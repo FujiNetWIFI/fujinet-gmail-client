@@ -93,9 +93,18 @@ void ui_busy(unsigned char reason)
     if (reason == BUSY_INDEX) {
         scr_center(FLAT_HEAD, "OPENING MAILBOX...", 0);
         scr_center(FLAT_BODY + 1, "UP TO 60 SECONDS", 0);
+    } else if (reason == BUSY_SEND) {
+        scr_center(FLAT_HEAD, "SENDING MESSAGE...", 0);
     } else {
         scr_center(FLAT_HEAD, "FETCHING MESSAGE...", 0);
     }
+}
+
+void ui_sent(void)
+{
+    flat_screen();
+    scr_center(FLAT_HEAD, "MESSAGE SENT", 0);
+    scr_center(FLAT_ANYKEY, "PRESS ANY KEY", 0);
 }
 
 void ui_error(unsigned char code)
@@ -114,6 +123,13 @@ void ui_error(unsigned char code)
         break;
     case GM_NOTFOUND:
         l1 = "MESSAGE NOT FOUND";
+        break;
+    case GM_REJECTED:
+        l1 = "DRAFT REJECTED";
+        l2 = "CHECK THE ADDRESS";
+        break;
+    case GM_TOOBIG:
+        l1 = "MESSAGE TOO LARGE";
         break;
     case GM_NOSERVICE:
         l1 = "SERVICE UNAVAILABLE";
@@ -283,7 +299,7 @@ void ui_inbox(void)
     }
 
     draw_panel();
-    scr_field(FOOT_ROW, 0, "ENT:READ <>:PAGE R:REFR Q:QUIT", SCR_COLS, 0);
+    scr_field(FOOT_ROW, 0, "ENT:RD C:NEW <>:PG R:REF Q:QUIT", SCR_COLS, 0);
 }
 
 /* Repaint only what a selection move touched. gm_sel is already the new one,
@@ -345,7 +361,7 @@ void ui_message(unsigned int top)
        FOOT_ROW exactly. The Atari has two spare rows there and clears them;
        doing the same here would ask scr_rows_clear() for a negative run. */
 
-    scr_field(FOOT_ROW, 0, "^V:LINE <>:PAGE BRK:BACK", SCR_COLS, 0);
+    scr_field(FOOT_ROW, 0, "R:RPLY F:FWD ^V <> BRK:BK", SCR_COLS, 0);
 
     pages = (gm_body_rows + MSG_ROWS - 1) / MSG_ROWS;
     if (pages == 0)
@@ -365,4 +381,98 @@ void ui_message(unsigned int top)
     if (gm_body_trunc)
         strcat(sbuf, "+");
     scr_right(FOOT_ROW, RIGHT_COL, sbuf, 0);
+}
+
+/* ------------------------------------------------------------------ */
+/* Compose form                                                        */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Sixteen rows carry two header fields, six body lines, a hint and a
+ * message row, so the spacing is tighter than anyone else's. The active
+ * field is a full inverse bar -- the list's selection language -- with
+ * the cursor cell knocked back to normal video. compose.c owns the cursor
+ * and the horizontal scroll; the editor here is append-and-backspace (see
+ * input.c) and the echo is the 6847's uppercase set, which is also
+ * everything the wire will get from this keyboard.
+ */
+
+#define FRM_BODY_TOP    4
+#define FRM_HINT_ROW    (FRM_BODY_TOP + FRM_NBODY + 1)
+#define FRM_MSG_ROW     (FRM_HINT_ROW + 1)
+#define FRM_HDR_COL     3       /* TO/SU value column */
+#define FRM_HDR_W       29      /* their window: cols 3..31 */
+
+#if FRM_MSG_ROW >= FOOT_ROW
+#error "the form no longer fits above the footer -- lower FRM_NBODY"
+#endif
+
+static unsigned char frm_row(unsigned char f)
+{
+    if (f == F_TO)
+        return 1;
+    if (f == F_SUBJ)
+        return 2;
+    return (unsigned char) (FRM_BODY_TOP + (f - F_BODY0));
+}
+
+static unsigned char frm_col(unsigned char f)
+{
+    return (unsigned char) ((f >= F_BODY0) ? 0 : FRM_HDR_COL);
+}
+
+unsigned char ui_form_width(unsigned char f)
+{
+    return (unsigned char) ((f >= F_BODY0) ? SCR_COLS : FRM_HDR_W);
+}
+
+void ui_form(unsigned char mode)
+{
+    scr_clear();
+
+    scr_text(0, 0, (mode == FRM_REPLY) ? "REPLY"
+                 : (mode == FRM_FWD)   ? "FORWARD"
+                                       : "NEW MESSAGE", 0);
+
+    scr_text(1, 0, "TO", 0);
+    scr_text(2, 0, "SU", 0);
+
+    if (mode == FRM_REPLY)
+        scr_text(FRM_HINT_ROW, 0, "BLANK TO/SU = REPLY DEFAULTS", 0);
+
+    scr_field(FOOT_ROW, 0, "ENT:NEXT LFT:DEL BRK:DONE", SCR_COLS, 0);
+}
+
+void ui_form_row(unsigned char f, const char *win, unsigned char curx,
+                 unsigned char active)
+{
+    unsigned char row = frm_row(f);
+    unsigned char col = frm_col(f);
+    char          b[2];
+
+    scr_field(row, col, win, ui_form_width(f), active);
+
+    if (active) {
+        b[0] = curx < strlen(win) ? win[curx] : ' ';
+        b[1] = '\0';
+        scr_field(row, (unsigned char) (col + curx), b, 1, 0);
+    }
+}
+
+void ui_form_msg(unsigned char msg)
+{
+    const char *s;
+
+    scr_row_clear(FRM_MSG_ROW);
+
+    /* A switch of literals, which CMOC stores as plain strings -- a static
+       table of pointers would cost run-time init code per entry. */
+    switch (msg) {
+    case FM_ASK:      s = "SEND? (Y/N)";      break;
+    case FM_NEEDTO:   s = "TO REQUIRED";      break;
+    case FM_NEEDBODY: s = "MESSAGE REQUIRED"; break;
+    default:          return;               /* FM_NONE: cleared above */
+    }
+
+    scr_center(FRM_MSG_ROW, s, 1);
 }

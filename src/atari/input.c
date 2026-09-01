@@ -41,7 +41,12 @@ unsigned char plat_getkey(void)
     case CH_ENTER:                  return K_ENTER;
     case CH_ESC:                    return K_BACK;
 
-    case 'r': case 'R': case CH_CLR: return K_REFRESH;
+    /* R is K_REPLY everywhere and the inbox folds it into refresh; the
+       CLR key stays refresh outright. */
+    case 'r': case 'R':             return K_REPLY;
+    case CH_CLR:                    return K_REFRESH;
+    case 'c': case 'C':             return K_COMPOSE;
+    case 'f': case 'F':             return K_FORWARD;
     case 'q': case 'Q':             return K_QUIT;
     }
 
@@ -51,4 +56,39 @@ unsigned char plat_getkey(void)
 void plat_anykey(void)
 {
     plat_key();
+}
+
+/*
+ * The compose form's read. The bare - = + * arrow aliases deliberately do
+ * NOT apply here: inside a form they are text -- an address can carry any
+ * of them -- so field movement is the real Ctrl-arrows only. ATASCII
+ * $20-$7A is the range that coincides with printable ASCII (plus the $60
+ * cell, whose byte is ASCII's backtick anyway); $7E is the backspace the
+ * BACK S key sends.
+ */
+unsigned char plat_getch(void)
+{
+#ifdef GM_FAKE_KEYS
+    /* Spent verbatim: the scripted K_* codes' low values land on E_* inside
+       the form, which is what lets a capture drive the field cursor. */
+    if (fake_idx < sizeof(fake_keys))
+        return fake_keys[fake_idx++];
+#endif
+
+    for (;;) {
+        unsigned char c = plat_key();
+
+        switch (c) {
+        case CH_CURS_UP:    return E_UP;
+        case CH_CURS_DOWN:  return E_DOWN;
+        case CH_CURS_LEFT:  return E_LEFT;
+        case CH_CURS_RIGHT: return E_RIGHT;
+        case CH_ENTER:      return E_ENTER;
+        case CH_ESC:        return E_DONE;
+        case 0x7E:          return E_BS;
+        }
+
+        if (c >= 0x20 && c <= 0x7A)
+            return c;
+    }
 }

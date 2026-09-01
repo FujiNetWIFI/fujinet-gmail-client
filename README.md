@@ -1,7 +1,8 @@
 # FujiNet Gmail client
 
-A read-only Gmail inbox browser for 8-bit machines, talking to Gmail through a
-FujiNet's GMAIL network adapter.
+A Gmail client for 8-bit machines — an inbox browser that can also compose,
+reply and forward — talking to Gmail through a FujiNet's GMAIL network
+adapter.
 
 Two implementations live here:
 
@@ -18,7 +19,7 @@ render the unread column as random inverse capitals.
 There is **no authentication in this program**. The FujiNet's GMAIL adapter
 uses the Google grant stored in FujiNet config — the user authorizes once in
 the FujiNet Web UI and the firmware handles token refresh. The console never
-sees a credential, which is why the whole client is two device-spec opens plus
+sees a credential, which is why the whole client is four device-spec opens plus
 a user interface.
 
 ---
@@ -39,7 +40,7 @@ Forty columns:
     Carol Diaz    Standup notes
 
  Alice Kim: Re: lunch tomorrow
- RET:READ  <>:PAGE  R:REFRESH  ESC:QUIT
+ RET:READ <>:PAGE C:NEW R:REFR ESC:QUIT
 ```
 
 Thirty-two, where the mark is drawn in semigraphics and the unread column is a
@@ -52,7 +53,7 @@ real coloured chip rather than a character:
  ■ BOB CHEN     INVOICE #22 IS AT
    CAROL DIAZ   STANDUP NOTES
  ALICE KIM: RE: LUNCH TOMORROW     <- the selection, spelled out
- ENT:READ <>:PAGE R:REFR Q:QUIT
+ ENT:RD C:NEW <>:PG R:REF Q:QUIT
 ```
 
 Eighty, where the date becomes a column of its own:
@@ -66,7 +67,7 @@ Eighty, where the date becomes a column of its own:
   ──────────────────────────────────────────────────────────────────────────
   Re: lunch tomorrow and the thing after it
   from Alice Kim
- RET⏎:READ   ↑↓:MOVE   ◀▶:PAGE   R:REFRESH   ESC:QUIT
+ RET⏎:READ   ↑↓:MOVE   ◀▶:PAGE   C:COMPOSE   R:REFRESH   ESC:QUIT
 ```
 
 Thirty-two again on the Adam, but with five more rows and no hint bar, because
@@ -81,7 +82,7 @@ the SmartKeys carry that:
    ... sixteen rows, the Atari's page size at the CoCo's width
  Alice Kim: Re: lunch tomorrow     <- the selection, spelled out
  and the thing after it
- [Read][Prev Pg][Next Pg][Refresh][ ][Quit]   <- the SmartKeys band
+ [Read][Prev Pg][Next Pg][Refresh][New][Quit]   <- the SmartKeys band
 ```
 
 MS-DOS renders the forty- and eighty-column layouts above and is the one
@@ -94,6 +95,65 @@ single-line rule), the colour modes get an EDIT.EXE-family look with the hint
 bar pulled to Gmail red, and mode 7 is where the MDA earns its own column:
 intensity for unread rows, reverse video for the bars, and a real underline
 under the reader's subject — the one attribute no other adapter has.
+
+**Compose / reply / forward** — one form serves all three: a To and a Subject
+field, then the body as separate lines on the same editor (no auto-wrap;
+`RETURN` moves to the next line). Printable keys insert at the cursor,
+backspace deletes before it, and leaving with anything typed asks
+`Send? (Y/N)` — the close of the write channel is what actually sends.
+
+Forty columns:
+
+```
+        Gmail  New message
+ To   someone@example.com
+ Subj Hello from an Atari
+
+ The body, one line per row.
+ RETURN moves down a line.
+
+              Send? (Y/N)              <- after ESC with content
+ RET:NEXT  ^v:FIELD  ESC:DONE
+```
+
+Thirty-two, uppercase because the 6847 has nothing else:
+
+```
+ REPLY
+ TO
+ SU
+ THANKS, SEE YOU AT NOON.
+
+ BLANK TO/SU = REPLY DEFAULTS
+ ENT:NEXT LFT:DEL BRK:DONE
+```
+
+A **reply** opens with everything blank, and blank means "take the defaults":
+the adapter fills the original's sender (its `Reply-To`, else `From`) and a
+`Re:` subject at send time, and threads the reply into the conversation.
+Typing either field overrides the default; erasing it again restores it. Only
+the body is required.
+
+A **forward** is assembled by the client — the adapter has no forward
+operation. The Subject arrives prefilled `Fwd: <original>` (editable), To is
+required, and the typed body becomes an optional introduction; at send time
+the client appends a separator block and the original message as it was
+wrapped for this screen:
+
+```
+ fyi -- see below
+
+ ---------- Forwarded message ----------
+ From: Alice Kim
+ Date: Aug 28 14:32
+ Subject: Re: lunch tomorrow
+
+ <the message, at this screen's wrap width>
+```
+
+The adapter caps a draft at 16K; a forward that would exceed it is cut at a
+row boundary and ends with `[forwarded message truncated]` rather than
+tripping the device-side cap, which would poison the whole draft.
 
 **Splash / busy / error** — flat screens with the logo. The error screen names
 the failure and shows the raw codes beneath it (`open code 212 dev 144`), which
@@ -109,29 +169,51 @@ is the difference between a reportable bug and "it just says error".
 | `→` | next page | page down |
 | `RETURN` | open the message | — |
 | `ESC` | quit | back to the inbox, without refetching |
-| `R` | refresh from the top | — |
+| `R` | refresh from the top | reply |
+| `C` | compose a new message | — |
+| `F` | — | forward |
+
+`R` means refresh in the inbox and reply in the reader — the two never share a
+screen, and the `CLEAR`-style keys stay refresh outright everywhere they
+exist. Compose works from an empty inbox too.
+
+Inside the form, printable keys type; `RETURN` moves to the next field, the
+vertical arrows move between fields, the horizontal ones move the cursor where
+the keyboard has them, backspace erases, and `ESC` leaves — silently when
+nothing was typed, through the `Send? (Y/N)` ask otherwise.
 
 The Atari's cursor keys need `Ctrl` held, which is a lot to ask while browsing a
 mailbox, so the bare keycaps those arrows live on — `-` `=` `+` `*` — work too.
-An enhanced //e has real arrow keys and needs no such workaround.
+An enhanced //e has real arrow keys and needs no such workaround. Inside the
+form the bare aliases deliberately do **not** apply — there they are text an
+address might need — so field movement is the real `Ctrl`-arrows; `BACK S`
+erases. On the Apple, `DELETE` erases and the left arrow moves the cursor,
+which is what it does in every Apple editor.
 
 The Adam has all of these on the keyboard, and the six SmartKeys above it in
-parallel: `Read` `Prev Pg` `Next Pg` `Refresh` and `Quit` on the inbox,
-`Pg Up` `Pg Dn` `Up` `Down` and `Back` in the reader. A SmartKey is
-discoverable and a keystroke is fast, and there is no reason to make anyone
-choose. `UNDO` joins `ESC` as back, and `CLEAR` joins `R` as refresh.
+parallel: `Read` `Prev Pg` `Next Pg` `Refresh` `New` and `Quit` on the inbox,
+`Pg Up` `Pg Dn` `Reply` `Fwd` and `Back` in the reader — the reader trades its
+redundant `Up`/`Down` caps for the two new actions — and `Up` `Down` `Send`
+`Done` on the form, where `Send` skips the ask that `Done` poses. A SmartKey
+is discoverable and a keystroke is fast, and there is no reason to make anyone
+choose. `UNDO` joins `ESC` as back, and `CLEAR` stays refresh.
 
 A CoCo has no `ESC` key, so **`BREAK`** backs out of the reader — what every
 FujiNet CoCo client does — and **`Q`** quits, rather than one key doing both.
 That is an improvement rather than a concession: the key that leaves the program
-is never one keystroke away from the key that leaves a message. `CLEAR` joins
-`R` as refresh, mirroring the Atari's use of its own `CLEAR`.
+is never one keystroke away from the key that leaves a message. `CLEAR` stays
+refresh, mirroring the Atari's use of its own `CLEAR`. In the form, `BREAK`
+leaves and the **left arrow erases** — BASIC's own convention, and with it
+spent there is no key left to walk the cursor: editing is append-and-backspace,
+in uppercase, because the 6847 has no lowercase to type or show.
 
 MS-DOS takes the CoCo's split — `ESC` backs out of the reader and is inert in
 the inbox, `Q` quits — and adds `PgUp`/`PgDn` as aliases for the page keys,
 because they are free on this keyboard and they are what a DOS user's fingers
 already do in a reader. On the PCjr the arrows themselves need the `Fn` shift,
-so the aliases are no worse there than anything else.
+so the aliases are no worse there than anything else. In the form, `TAB` joins
+`RETURN` as next-field, because that is what a DOS user's fingers do in any
+form.
 
 ---
 
@@ -277,18 +359,24 @@ load, but the client does not read the DOS clock — it asks the clock device
 for the ISO form directly, because the `+HHMM` offset is what turns the wire's
 UTC timestamps into a local date column.
 
-Gmail needs a Google grant with the `gmail.readonly` scope, authorized through
-the FujiNet Web UI — and it is per fujinet-pc instance, so a grant authorized
-against the Atari build's config is not visible to the CoCo build's. Only run
-one instance per bus: two of them fight over the port and one will exit
-mid-session.
+Gmail needs a Google grant with the `gmail.readonly` and `gmail.send` scopes,
+authorized through the FujiNet Web UI — and it is per fujinet-pc instance, so
+a grant authorized against the Atari build's config is not visible to the CoCo
+build's. Only run one instance per bus: two of them fight over the port and
+one will exit mid-session. **A grant stored before the send scope existed
+never gains it**: browsing keeps working, but every send fails with 167 until
+Google is re-authorized in the Web UI.
 
 ## Testing
 
 **Host tests** cover the portable text handling — the line-ending soup, the
-line-accumulator overflow, wrapping, truncation and the epoch arithmetic. These
-are the fiddliest parts of the program and they have no platform dependency, so
-they run natively instead of through a cross-compile and an emulator:
+line-accumulator overflow, wrapping, truncation and the epoch arithmetic — and
+the compose form: the exact draft bytes each mode emits (a bare-body reply is
+precisely `"\n" + body`), per-mode validation, the `Fwd:` prefill, and the
+forward truncation budget, which the wide shapes genuinely overflow and the
+narrow ones prove is never tripped by accident. These are the fiddliest parts
+of the program and they have no platform dependency, so they run natively
+instead of through a cross-compile and an emulator:
 
 ```sh
 make -C tests
@@ -438,8 +526,19 @@ are only visible in the second.
 
 One wart is this compiler's own: `wcc` cannot carry a comma through `-D` —
 everything after it parses as a second file to compile — so the script
-translates the `K_*` names into the digit string `GM_FAKE_KEYS_STR` and
-`src/msdos/input.c` accepts either spelling. Nobody types digits by hand.
+translates the `K_*` and `E_*` names into the code string `GM_FAKE_KEYS_STR`
+(`'0' + code`, sixteen values through `'?'`) and `src/msdos/input.c` accepts
+either spelling; anything `'@'` or above in the string types itself into the
+compose form, which is how a capture fills in an address. Nobody types the
+codes by hand.
+
+Scripted keys drive the compose form too, on every platform: the `E_*` names
+from `src/gmail.h` move the cursor (`E_ENTER` is next-field — inside the form
+`K_ENTER`'s value means `E_RIGHT`, which is the one trap), and printable ASCII
+codes type. So `"K_ENTER,K_REPLY"` photographs the reply form,
+`"K_COMPOSE,97,64,98,E_ENTER"` a compose with `a@b` already in To, and a build
+with `-DGM_FAKE_SEND_FAIL=167` (or 132, 162) makes the canned send fail so the
+error screens and the return-to-form path can be photographed.
 
 `tools/adam-decode.py` renders the result as a PNG, because on this machine a
 picture is the honest output — the screen is a bitmap and the parts of the
@@ -608,12 +707,19 @@ ProDOS global page, the real ceiling.
 **Memory** (`r2r/apple2enh/gmail.map`):
 
 ```
-$0803-$43A8   program: code, rodata, data, init      (15,270 bytes)
-$43A9-$A2DA   bss                                    (24,370 bytes)
-    ...       5,220 bytes spare
+$0803-$53CA   program: code, rodata, data, init      (19,400 bytes)
+$53CB-$B5E1   bss                                    (25,111 bytes)
+    ...       287 bytes spare
 $B700-$BEFF   C stack, __STACKSIZE__ = 2048
 $BF00         __HIMEM__ -- the ProDOS global page
 ```
+
+`gm_body` is 18,328 of that BSS. `BODY_ROWS` comes *down* from the Atari's 300
+even though the buffer grows, because at 78 columns a message needs about half
+the rows: 232 × 78 holds 18,096 characters against the Atari's 12,000. It came
+down once more, 240 → 232, when the compose form arrived — the ~1.35K `frmbuf`
+overflowed BSS by 346 bytes. Check the map before raising anything, and mind
+that `__STACKSIZE__` trades directly against BSS.
 
 ---
 
@@ -721,24 +827,24 @@ rather than returning, because there is nothing left to return to.
 **Memory** (`r2r/coco/gmail.map`, `Section: program_end`):
 
 ```
-$1000-$3FA8   program: code, rodata, data           (12,201 bytes)
-$3FA9-$6E6F   bss, of which gm_body is 9,504        (11,975 bytes)
-$6E70         program_end                    (3,472 bytes spare)
+$1000-$53E0   program: code, rodata, data           (17,377 bytes)
+$53E1-$7416   bss, of which gm_body is 6,864         (8,246 bytes)
+$7417         program_end                    (2,025 bytes spare)
 $7C00         --limit -- exceeding it is a link error, not a mystery
 $7F00         --initial-s, the C stack growing down
 ```
 
 The build that bounds `BODY_ROWS` is not the shipped one. A `-DGM_FAKE_DATA`
 build links the canned wire data *alongside* the real transport and ends about
-1.8K higher, so it is the one that runs out first — at 320 rows it had 641 bytes
+1.5K higher, so it is the one that runs out first — at 320 rows it had 641 bytes
 left, which would have meant the next string added to a screen breaking
 `tools/coco-shot.sh` while the product still fitted. Check both.
 
-`gm_body` is 18,960 of that BSS. `BODY_ROWS` comes *down* from the Atari's 300
-even though the buffer grows, because at 78 columns a message needs about half
-the rows: 240 × 78 holds 18,720 characters against the Atari's 12,000. Check the
-map before raising it, and mind that `__STACKSIZE__` trades directly against
-BSS.
+The compose form is why `BODY_ROWS` sits at 208 now, down from the 288 the
+reader-only client shipped with: the form engine, the send path and their
+screens are ~2.6K of 6809 code, the harness build overflowed by 521 bytes at
+240 rows, and 224 would have left it 7 — one string from breaking again. The
+Makefile carries the ladder down from here.
 
 ---
 
@@ -918,11 +1024,11 @@ gone and there is nothing to return to.
 **Memory** (`r2r/adam/gmail.map`):
 
 ```
-$00AD-$4803   code                                   (18,262 bytes)
-$4803-$4F33   rodata                                 ( 1,840 bytes)
-$4F33-$59D3   data                                   ( 2,720 bytes)
-$59D3-$9B65   bss, of which gm_body is 10,560        (16,786 bytes)
-    ...       11,419 bytes spare
+$00AD-$58A9   code                                   (22,524 bytes)
+$58A9-$64A7   rodata                                 ( 3,070 bytes)
+$64A7-$6F47   data                                   ( 2,720 bytes)
+$6F47-$AE2D   bss, of which gm_body is 10,560        (16,102 bytes)
+    ...       6,611 bytes spare
 $C800-$C82B   the 43-byte boot block -- the ceiling
 $D390         the stack, growing down
 ```
@@ -1012,22 +1118,23 @@ each file says when it can be deleted:
   becomes the "FujiNet not found" screen naming `CONFIG.SYS`, instead of a
   crash. Unlike the Adam's, the library's bool here is not inverted; this
   override exists purely for the guard.
-- `network_open()` and `network_read()` (`net_msdos.c`) — the current
-  `FUJINET.SYS` speaks the FujiBusPacket protocol, in which `DH` is a field
-  descriptor telling the driver how the aux bytes become typed parameters —
-  and fujinet-lib 4.11.2's bus entries always send `DH=0`, no parameters at
-  all. Commands that need none (status, close, the fuji and clock devices)
-  work by luck; the two that carry them do not — the firmware logs
-  `Insufficient open paramaters: 0` and NAKs, which is how the first live run
-  against fujinet-pc-rs232 found it. The overrides carry their own bus entry
-  with `DH` set properly: `DH=2` (mode and trans as two u8 params) for the
-  open, `DH=5` (the length as one u16) for the read. The open also sends the
-  devicespec at its real length rather than the library's flat 256 — the
-  firmware takes the payload into a `std::string` verbatim — and the read
-  replaces a `__WATCOMC__` branch that passed the unit *number* where a
-  devicespec *pointer* was expected and bailed between chunks whenever the
-  status error byte was not exactly 1, zero-as-healthy being precisely the
-  Mailbox quirk `st_ok()` in `net.c` exists for.
+- `network_open()`, `network_read()` and `network_write()` (`net_msdos.c`) —
+  the current `FUJINET.SYS` speaks the FujiBusPacket protocol, in which `DH`
+  is a field descriptor telling the driver how the aux bytes become typed
+  parameters — and fujinet-lib 4.11.2's bus entries always send `DH=0`, no
+  parameters at all. Commands that need none (status, close, the fuji and
+  clock devices) work by luck; the ones that carry them do not — the firmware
+  logs `Insufficient open paramaters: 0` and NAKs, which is how the first live
+  run against fujinet-pc-rs232 found it. The overrides carry their own bus
+  entry with `DH` set properly: `DH=2` (mode and trans as two u8 params) for
+  the open, `DH=5` (the length as one u16) for the read and for the write the
+  compose draft goes out through. The open also sends the devicespec at its
+  real length rather than the library's flat 256 — the firmware takes the
+  payload into a `std::string` verbatim — and the read replaces a
+  `__WATCOMC__` branch that passed the unit *number* where a devicespec
+  *pointer* was expected and bailed between chunks whenever the status error
+  byte was not exactly 1, zero-as-healthy being precisely the Mailbox quirk
+  `st_ok()` in `net.c` exists for.
 - `network_error()` (`net_msdos.c`) — the library's version returns
   `network_status()`'s own return instead of the error byte it carried, and
   `network_open()` returns `network_error()` on a failed open — so a refused
@@ -1053,8 +1160,22 @@ round trip.
 
 Inherited from the adapter and the original, not accidents of the port:
 
-- **Read only.** The scope is `gmail.readonly` — no compose, reply, delete, or
-  server-side mark-as-read.
+- **Sending needs re-authorization.** The scope grew from `gmail.readonly`
+  alone to include `gmail.send` when compose arrived, and an existing grant
+  never gains a new scope — a grant stored before that fails every send with
+  167 (`Google access denied`) until Google is re-authorized in the FujiNet
+  Web UI. Browsing is unaffected either way.
+- **No delete, and no server-side mark-as-read.** Compose, reply and forward
+  are the whole write surface; there are no CC/BCC fields and no drafts —
+  a draft abandoned at the `Send?` ask is simply discarded.
+- **A forward re-flows the original.** The client only keeps the body as
+  wrapped display rows, so what it forwards is the message at this screen's
+  width (32–78 columns), and a forward that would exceed the adapter's 16K
+  draft cap is cut at a row boundary with `[forwarded message truncated]`.
+- **The Apple II reports sends optimistically.** The IWM bus layer discards
+  the commit verdict the close latches, so a rejected or failed send still
+  shows `Message sent` there. Open-side and write-side failures still report
+  normally; the other four buses report the real verdict.
 - **Inbox only.** The adapter accepts any label as a folder; the folder name is
   hardcoded here.
 - **Read/unread is local**, a single 8-byte timestamp in a FujiNet appkey
@@ -1088,7 +1209,10 @@ Inherited from the adapter and the original, not accidents of the port:
 src/            portable core
   gmail.h       every shared type and the plat_* / ui_* contract
   main.c        boot, the inbox loop and the reader loop
-  net.c         the two device specs, the streaming read, canned data
+  net.c         the four device specs, the streaming read, the draft
+                channel, canned data
+  form.c        the compose form model -- fields, validation, the draft bytes
+  compose.c     the compose screen -- the editor loop and the cursor
   body.c        message body ingest -- line endings, overflow, truncation
   wrap.c        greedy word wrap
   sanitize.c    charset clamping
@@ -1134,7 +1258,7 @@ src/msdos/      MS-DOS backend
   input.c       INT 16h key mapping and the blocking read
   clock_msdos.c clock_get_time() -- fujinet-lib has none for this bus
   fuji_msdos.c  the adapter probe, guarding a null INT F5 vector
-  net_msdos.c   network_error() and network_read(), replacing library bugs
+  net_msdos.c   network_error/read/write and the open, replacing library bugs
   AUTOEXEC.BAT  @ECHO OFF and GMAIL, copied onto the disk with mcopy -t
 tests/          host-native tests, built once per screen shape
 tools/          headless capture and decode, per platform
