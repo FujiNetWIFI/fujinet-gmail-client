@@ -83,6 +83,13 @@ void dli_vbi_install(void);     /* dli.s -- keeps ATRACT at zero */
 void dli_vbi_remove(void);
 
 /* ------------------------------------------------------------------ */
+/* timer.c -- the frame counter the wall clock runs on                 */
+/* ------------------------------------------------------------------ */
+
+/* plat_vsync(), plat_ticks() and plat_fps() are declared in gmail.h: every
+   backend owes them now, so the contract lives with the rest of it. */
+
+/* ------------------------------------------------------------------ */
 /* pmg.c -- player/missile Gmail logo                                  */
 /* ------------------------------------------------------------------ */
 

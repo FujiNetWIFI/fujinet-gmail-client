@@ -33,12 +33,19 @@
  * the width they are wrapped to.
  *
  * A wider screen wants fewer rows, not more: the same message needs about half
- * as many at 78 columns as at 40. The Atari's 300 x 40 is ~12000 characters and
- * leaves ~8K of its BSS budget free; the Apple II's 240 x 78 is ~18700 in about
- * 6.7K more. Check the platform's map file before raising either.
+ * as many at 78 columns as at 40. Check the platform's map file before raising
+ * either -- the Atari has about 700 bytes of BSS to its name and every one of
+ * these numbers is spent against the same ceiling.
+ *
+ * 264, down from the 300 this started at, is what pays for a compose form that
+ * holds more than a screenful: FRM_NBODY 12 -> 48 costs 1,404 bytes and 36
+ * body rows give back 1,476. The reader loses two pages of a very long message
+ * (264 x 40 is ~10,500 characters, still fourteen and a half screens) and the
+ * form gains three and a half screens to type into, which is the better half
+ * of that trade for a mail client that can now reply properly.
  */
 #ifndef BODY_ROWS
-#define BODY_ROWS       300
+#define BODY_ROWS       224
 #endif
 #ifndef BODY_COLS
 #define BODY_COLS       40
@@ -200,18 +207,33 @@ extern const char   *gm_stage;      /* which step failed: open / status / read *
 
 /*
  * Field capacities, excluding the NUL. The body is FRM_NBODY separate line
- * fields on the same form engine as TO and SUBJECT -- there is no auto-wrap;
- * Enter moves to the next line. Both body knobs are per-platform RAM/screen
+ * fields on the same form engine as TO and SUBJECT. Enter moves to the next
+ * line, and a line that fills pushes its trailing word down to the one below
+ * -- see form_body_spill(). All three knobs are per-platform RAM and screen
  * decisions and come from the Makefile.
+ *
+ * FRM_NBODY is what the form *stores*; FRM_VBODY is how many of those lines
+ * are on screen at once, and compose.c scrolls the window between them. They
+ * were one number while the form could hold only a screenful, which is
+ * exactly what made it hold only a screenful. Keeping them apart is what
+ * lets the storage grow without asking any backend to find more rows: a
+ * backend lays out FRM_VBODY rows and never sees FRM_NBODY at all.
  */
 #ifndef FRM_NBODY
-#define FRM_NBODY       12      /* body lines on the form */
+#define FRM_NBODY       48      /* body lines the form holds */
+#endif
+#ifndef FRM_VBODY
+#define FRM_VBODY       12      /* body lines visible at once */
 #endif
 #ifndef FRM_BODY_COLS
 #define FRM_BODY_COLS   38      /* storage width of one body line */
 #endif
 #define FRM_TO_MAX      63
 #define FRM_SUBJ_MAX    63
+
+#if FRM_VBODY > FRM_NBODY
+#error "FRM_VBODY must not exceed FRM_NBODY"
+#endif
 
 /* The emit/echo scratch must hold the longest emitted line -- a header, the
    forward block's full-width original subject, or a body row (the form's
@@ -268,6 +290,12 @@ unsigned char form_any_dirty(void);
 unsigned char form_validate(unsigned char *bad);
 void          form_emit(void);
 
+/* Automatic wrap: push the trailing word of body line *line down onto the
+   line below, moving the cursor (*line, *pos) with it when the cursor was in
+   that word. Returns 1 when room was made. One line deep and forward only --
+   see the note on the definition. */
+unsigned char form_body_spill(unsigned char *line, unsigned char *pos);
+
 /* compose.c -- the form screen. Reply and forward act on gm_index[gm_sel];
    the caller repaints its own screen afterwards either way. */
 void          compose_new(void);
@@ -315,13 +343,26 @@ unsigned char gm_send_end(void);
    network, no device call. tests/hosttest.c exercises all of it. */
 void          date_fmt(char *dst, const uint8_t ts[8]);
 
-/* clock.c -- what date.c needs from the device, read once at boot. gm_tzoff is
-   minutes east of UTC and gm_year the current year, or 0 for "unknown", which
-   is also what they stay at if the FujiNet has no clock registered: dates then
-   read as UTC and always carry a time. */
+/* clock.c -- what date.c needs from the device, plus the wall clock's starting
+   point. gm_tzoff is minutes east of UTC and gm_year the current year, or 0 for
+   "unknown", which is also what they stay at if the FujiNet has no clock
+   registered: dates then read as UTC and always carry a time. */
 extern int          gm_tzoff;
 extern unsigned int gm_year;
 void          clock_load(void);
+
+/* tick.c -- the wall clock between device reads. gm_clock_ok is 0 when the
+   device never answered, and nothing draws a clock then. tick_reset() is
+   clock.c's to call after a good read; tick_advance() and tick_due_resync()
+   belong to main.c's loops; clock_pump() is what every backend's blocking key
+   wait calls once round, and is the only one that paints. */
+extern unsigned char gm_h, gm_mi, gm_s;
+extern unsigned char gm_clock_ok;
+
+void          tick_reset(void);
+unsigned char tick_advance(void);
+unsigned char tick_due_resync(void);
+void          clock_pump(void);
 
 /* hwm.c -- read/unread high-water mark, persisted in a FujiNet appkey. */
 void          hwm_load(void);
@@ -387,6 +428,21 @@ void          plat_net_end(void);
 unsigned char plat_getkey(void);        /* blocks, returns a K_* code */
 void          plat_anykey(void);        /* blocks until any key */
 
+/*
+ * Frame timing, and the obligation that comes with it.
+ *
+ * plat_ticks() is a free-running counter in plat_fps() units. It has to go on
+ * rising while a screen sits waiting for a key, because that is the whole of
+ * what the wall clock runs on -- which is why every blocking wait above is a
+ * poll around plat_vsync() and clock_pump() rather than a firmware call that
+ * never comes back. On the machines whose counter is the OS's own (the Atari's
+ * RTCLOK, the PC's BIOS tick) that is belt and braces; on the ones this program
+ * counts itself it is the only thing keeping the clock honest.
+ */
+void          plat_vsync(void);
+unsigned long plat_ticks(void);
+unsigned char plat_fps(void);
+
 /* Busy overlay reasons. */
 #define BUSY_INDEX  1
 #define BUSY_BODY   2
@@ -400,6 +456,15 @@ void          ui_inbox(void);                   /* full repaint */
 void          ui_inbox_sel(unsigned char from, unsigned char to);
 void          ui_message(unsigned int top);     /* header + body window */
 void          ui_sent(void);                    /* flat "message sent" screen */
+
+/*
+ * The wall clock, in whatever slot the screen that is up has for it -- which
+ * is the backend's business, and is nothing at all on the flat screens, where
+ * the program is inside a device call and the clock is stopped anyway. Painted
+ * by the screen painters above on a repaint, and by clock_pump() once a minute
+ * in between. Draws nothing while gm_clock_ok is 0.
+ */
+void          ui_clock(void);
 
 /*
  * The form screen. ui_form() paints the chrome -- title, field labels, the

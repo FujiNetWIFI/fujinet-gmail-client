@@ -78,14 +78,16 @@ FUJINET_LIB = /home/thomc/Workspace/fujinet-lib/build
 # overruns the buffer and drops the surplus from the stream. GM_PKT tells
 # src/net.c to stage the listing in packets, and GM_RXBUF has to be at least as
 # large so a body read takes a whole one; net.c refuses to compile otherwise.
-# FRM_NBODY x FRM_BODY_COLS is the compose form's body: twelve full-width
-# lines. Unlike gm_body it cannot ride on an overlay -- a forward reads
-# gm_body while the form is up -- but at 33 bytes a line the whole frmbuf is
-# ~600 bytes, well inside the spare noted above.
+# FRM_VBODY x FRM_BODY_COLS is what the compose form shows: twelve full-width
+# lines, which is what this screen has room for under two header fields.
+# FRM_NBODY is what it holds -- four windows' worth, scrolled -- and it is the
+# number that costs RAM. Unlike gm_body the form cannot ride on an overlay: a
+# forward reads gm_body while the form is up. At 33 bytes a line the whole
+# frmbuf is ~1.7K, which is what the spare noted above is for.
 CFLAGS_EXTRA_ADAM  = -DBUILD_ADAM -Os
 CFLAGS_EXTRA_ADAM += -DMSG_ROWS=17
 CFLAGS_EXTRA_ADAM += -DBODY_COLS=32 -DBODY_ROWS=320 -DENT_SUBJ_LEN=48
-CFLAGS_EXTRA_ADAM += -DFRM_NBODY=12 -DFRM_BODY_COLS=32
+CFLAGS_EXTRA_ADAM += -DFRM_NBODY=48 -DFRM_VBODY=12 -DFRM_BODY_COLS=32
 CFLAGS_EXTRA_ADAM += -DGM_PKT=1024 -DGM_RXBUF=1024
 
 # tools/adam-shot.sh appends -DGM_FAKE_DATA / -DGM_FAKE_KEYS through here, for
@@ -130,9 +132,9 @@ LDFLAGS_EXTRA_ATARI += --mapfile r2r/atari/gmail.map
 # ~1.35K, and BODY_ROWS pays for it: at 240 the compose build overflowed BSS
 # by 346 bytes, so the body gives back eight rows (632 bytes) -- 232 rows is
 # still eleven and a half pages of a message.
-CFLAGS_EXTRA_APPLE2ENH  = -DBODY_COLS=78 -DBODY_ROWS=232 -DLINE_CAP=256
+CFLAGS_EXTRA_APPLE2ENH  = -DBODY_COLS=78 -DBODY_ROWS=176 -DLINE_CAP=256
 CFLAGS_EXTRA_APPLE2ENH += -DENT_SUBJ_LEN=128 -DMSG_ROWS=20
-CFLAGS_EXTRA_APPLE2ENH += -DFRM_NBODY=14 -DFRM_BODY_COLS=76
+CFLAGS_EXTRA_APPLE2ENH += -DFRM_NBODY=42 -DFRM_VBODY=14 -DFRM_BODY_COLS=76
 
 # apple2enh.cfg presumes RAM ends at $9600, leaving room for the ProDOS file
 # buffers this client never opens -- fujinet-lib talks SmartPort directly and
@@ -177,10 +179,11 @@ LDFLAGS_EXTRA_APPLE2ENH += --mapfile r2r/apple2enh/gmail.map
 # which is still seventeen pages of a message and leaves the harness ~535 and
 # the product ~2K. The next rungs down are 192, then FRM_NBODY 6 -> 5.
 #
-# FRM_NBODY x FRM_BODY_COLS is the compose form's body: six full-width lines,
-# which is what a 16-row screen can show under two header fields. The frmbuf
-# is ~400 bytes and cannot overlay gm_body -- a forward reads it while the
-# form is up.
+# FRM_VBODY x FRM_BODY_COLS is what the compose form shows: six full-width
+# lines, which is what a 16-row screen can spare under two header fields.
+# FRM_NBODY is what it holds -- four of those windows, scrolled -- and it is
+# the one that costs RAM. The frmbuf is ~800 bytes and cannot overlay gm_body,
+# because a forward reads gm_body while the form is up.
 #
 # LINE_CAP is deliberately NOT lowered to match the narrower screen. It is the
 # raw wire line accumulator, not a display width, and a line longer than it gets
@@ -188,8 +191,8 @@ LDFLAGS_EXTRA_APPLE2ENH += --mapfile r2r/apple2enh/gmail.map
 # row in the middle of a paragraph. Six and a quarter rows of slack at 32
 # columns is the same 200 bytes the Atari spends for five.
 CFLAGS_EXTRA_COCO  = -DIDX_MAX=11 -DMSG_ROWS=12
-CFLAGS_EXTRA_COCO += -DBODY_COLS=32 -DBODY_ROWS=208
-CFLAGS_EXTRA_COCO += -DFRM_NBODY=6 -DFRM_BODY_COLS=32
+CFLAGS_EXTRA_COCO += -DBODY_COLS=32 -DBODY_ROWS=142
+CFLAGS_EXTRA_COCO += -DFRM_NBODY=24 -DFRM_VBODY=6 -DFRM_BODY_COLS=32
 CFLAGS_EXTRA_COCO += -DENT_SUBJ_LEN=48 -DGM_RXBUF=256
 
 CFLAGS_EXTRA_COCO += -fomit-frame-pointer
@@ -270,10 +273,12 @@ LDFLAGS_EXTRA_COCO += --no-relocate -i
 # -os is optimise-for-size; wcc's default is no optimisation at all.
 # The compose form stores 76-column body lines -- the 80-column shape -- and
 # windows them narrower at runtime when the machine booted in 40 columns,
-# exactly the GM_RT_COLS trade the body buffer makes. ~1.1K of DGROUP.
+# exactly the GM_RT_COLS trade the body buffer makes. FRM_VBODY is the fourteen
+# rows on screen; FRM_NBODY is the fifty-six it holds and scrolls between.
+# ~4.4K of DGROUP, which is the one budget here with room for it.
 CFLAGS_EXTRA_MSDOS  = -os -DGM_RT_COLS -DMSG_ROWS=21
 CFLAGS_EXTRA_MSDOS += -DBODY_COLS=78 -DBODY_ROWS=400 -DLINE_CAP=256
-CFLAGS_EXTRA_MSDOS += -DFRM_NBODY=14 -DFRM_BODY_COLS=76
+CFLAGS_EXTRA_MSDOS += -DFRM_NBODY=56 -DFRM_VBODY=14 -DFRM_BODY_COLS=76
 CFLAGS_EXTRA_MSDOS += -DENT_SUBJ_LEN=128 -DGM_RXBUF=1024
 
 # tools/msdos-shot.sh appends -DGM_FAKE_DATA / -DGM_FAKE_KEYS through here,

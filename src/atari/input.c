@@ -25,14 +25,9 @@ static const unsigned char fake_keys[] = { GM_FAKE_KEYS };
 static unsigned char fake_idx;
 #endif
 
-unsigned char plat_getkey(void)
+static unsigned char map(unsigned char c)
 {
-#ifdef GM_FAKE_KEYS
-    if (fake_idx < sizeof(fake_keys))
-        return fake_keys[fake_idx++];
-#endif
-
-    switch (plat_key()) {
+    switch (c) {
     case CH_CURS_UP:    case '-':   return K_UP;
     case CH_CURS_DOWN:  case '=':   return K_DOWN;
     case CH_CURS_LEFT:  case '+':   return K_LEFT;
@@ -53,9 +48,46 @@ unsigned char plat_getkey(void)
     return K_NONE;
 }
 
+/*
+ * The blocking waits are polls now, because the wall clock has to advance
+ * while one of them is up and nothing advances inside KEYBDV. CH ($02FC) is
+ * where the keyboard IRQ leaves the raw code, so "nothing pending" costs one
+ * load and lets the loop run a frame at a time.
+ *
+ * A headless run is the exception and blocks in the real read. That is where
+ * tools/atari-shot.sh has its breakpoint -- once the scripted keys are spent
+ * the program has to come to rest somewhere the monitor can catch it, and a
+ * polling loop would spin until the capture timed out with nothing to show.
+ * The cost is that a headless capture never sees the clock advance; that is
+ * what tests/hosttest.c's tick_advance() cases are for.
+ */
+static unsigned char key_wait(void)
+{
+#ifdef GM_FAKE_DATA
+    return plat_key();
+#else
+    while (OS.ch == 0xFF) {
+        plat_vsync();
+        clock_pump();
+    }
+
+    return plat_key();
+#endif
+}
+
+unsigned char plat_getkey(void)
+{
+#ifdef GM_FAKE_KEYS
+    if (fake_idx < sizeof(fake_keys))
+        return fake_keys[fake_idx++];
+#endif
+
+    return map(key_wait());
+}
+
 void plat_anykey(void)
 {
-    plat_key();
+    key_wait();
 }
 
 /*
@@ -76,7 +108,7 @@ unsigned char plat_getch(void)
 #endif
 
     for (;;) {
-        unsigned char c = plat_key();
+        unsigned char c = key_wait();
 
         switch (c) {
         case CH_CURS_UP:    return E_UP;

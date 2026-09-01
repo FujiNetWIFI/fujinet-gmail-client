@@ -31,6 +31,20 @@ int          gm_tzoff;
 unsigned int gm_year;
 
 /*
+ * tick.c's two platform calls and its one painter. Owning the counter is the
+ * whole point: a clock driven by a variable this file sets can be walked
+ * across a minute, an hour and midnight in a microsecond, which is the only
+ * practical way to test any of them.
+ */
+static unsigned long fake_ticks;
+static unsigned char fake_hz = 60;
+static unsigned int  clock_paints;
+
+unsigned long plat_ticks(void)  { return fake_ticks; }
+unsigned char plat_fps(void)    { return fake_hz; }
+void          ui_clock(void)    { clock_paints++; }
+
+/*
  * form.c reads the index record and the selection, which net.c and main.c
  * own on a real target; neither builds here, so this file owns both, which
  * makes the forward block's From/Date/Subject test inputs.
@@ -630,6 +644,245 @@ static void test_form(void)
     }
 }
 
+/* ------------------------------------------------------------------ */
+
+/*
+ * The wrap. Every assertion here is written against FRM_BODY_COLS rather than
+ * a literal, because the six shapes run this at 32, 38 and 76 and the whole
+ * point of running it six times is that a width-dependent bug shows up in one
+ * of them.
+ */
+static void fill_word(char *d, unsigned char n, unsigned char word)
+{
+    memset(d, 'a', n);
+    d[n - word - 1] = ' ';
+    memset(d + n - word, 'b', word);
+    d[n] = '\0';
+}
+
+static void test_spill(void)
+{
+    const unsigned char W = FRM_BODY_COLS;
+    unsigned char ln, pos;
+
+    puts("form wrap");
+
+    /* The ordinary case: a full line, the cursor typing at its end, and an
+       empty line below. The word goes down and the cursor goes with it. */
+    form_init(FRM_COMPOSE);
+    fill_word(frm.body[0], W, 3);
+    ln = 0; pos = W;
+    eq_int("spill", form_body_spill(&ln, &pos), 1);
+    eq_int("head trimmed", (int) strlen(frm.body[0]), W - 4);
+    eq_str("tail moved", frm.body[1], "bbb");
+    eq_int("cursor line", ln, 1);
+    eq_int("cursor pos", pos, 3);
+
+    /* The break space is dropped, not carried: the head must not end in one. */
+    eq_int("no trailing space", frm.body[0][W - 5] == ' ', 0);
+
+    /* A line below with text on it gets one separator space and no more. */
+    form_init(FRM_COMPOSE);
+    fill_word(frm.body[0], W, 3);
+    strcpy(frm.body[1], "cc");
+    ln = 0; pos = W;
+    eq_int("spill onto text", form_body_spill(&ln, &pos), 1);
+    eq_str("separated", frm.body[1], "bbb cc");
+    eq_int("cursor still in the word", pos, 3);
+
+    /* One word longer than the line: hard-split a character at a time, with
+       no separator, because the word is continuing rather than starting. */
+    form_init(FRM_COMPOSE);
+    memset(frm.body[0], 'a', W);
+    frm.body[0][W] = '\0';
+    ln = 0; pos = W;
+    eq_int("hard split", form_body_spill(&ln, &pos), 1);
+    eq_int("one char left", (int) strlen(frm.body[0]), W - 1);
+    eq_str("one char moved", frm.body[1], "a");
+    eq_int("hard split line", ln, 1);
+    eq_int("hard split pos", pos, 1);
+
+    /* A full line below cannot take the word, so nothing moves at all. */
+    form_init(FRM_COMPOSE);
+    fill_word(frm.body[0], W, 3);
+    memset(frm.body[1], 'c', W);
+    frm.body[1][W] = '\0';
+    ln = 0; pos = W;
+    eq_int("no room refuses", form_body_spill(&ln, &pos), 0);
+    eq_int("head untouched", (int) strlen(frm.body[0]), W);
+    eq_int("cursor untouched", pos, W);
+
+    /* The last line has nowhere below it. */
+    form_init(FRM_COMPOSE);
+    fill_word(frm.body[FRM_NBODY - 1], W, 3);
+    ln = FRM_NBODY - 1; pos = W;
+    eq_int("bottom refuses", form_body_spill(&ln, &pos), 0);
+    eq_int("bottom line untouched", ln, FRM_NBODY - 1);
+
+    /* A cursor left behind by the move stays where it was. */
+    form_init(FRM_COMPOSE);
+    fill_word(frm.body[0], W, 3);
+    ln = 0; pos = 2;
+    eq_int("spill with cursor above", form_body_spill(&ln, &pos), 1);
+    eq_int("cursor stayed", ln, 0);
+    eq_int("cursor pos kept", pos, 2);
+
+    /*
+     * A line that ends in the break space has an empty tail: dropping the
+     * space is the room and nothing moves -- but the cursor still goes to
+     * column 0 below it, because the character about to be typed starts the
+     * next line. Getting this wrong welds two words together, which is what a
+     * CoCo capture caught: "GGG HHH " then "I" came out as "GGG HHHI".
+     */
+    form_init(FRM_COMPOSE);
+    memset(frm.body[0], 'a', W - 1);
+    frm.body[0][W - 1] = ' ';
+    frm.body[0][W] = '\0';
+    ln = 0; pos = W;
+    eq_int("trailing space spill", form_body_spill(&ln, &pos), 1);
+    eq_int("space dropped", (int) strlen(frm.body[0]), W - 1);
+    eq_str("nothing moved", frm.body[1], "");
+    eq_int("cursor went below", ln, 1);
+    eq_int("cursor at column 0", pos, 0);
+
+    /* And a cursor that was not at the break stays put through the same
+       spill: only the text at or past the break travels. */
+    form_init(FRM_COMPOSE);
+    memset(frm.body[0], 'a', W - 1);
+    frm.body[0][W - 1] = ' ';
+    frm.body[0][W] = '\0';
+    ln = 0; pos = 4;
+    eq_int("trailing space, cursor above", form_body_spill(&ln, &pos), 1);
+    eq_int("stayed on the line", ln, 0);
+    eq_int("stayed at 4", pos, 4);
+}
+
+/* ------------------------------------------------------------------ */
+
+/*
+ * The wall clock. plat_ticks() is a variable here, so a day of it costs
+ * nothing -- which is the only reason any of the boundaries below are tested
+ * at all rather than reasoned about.
+ */
+static void set_clock(unsigned char h, unsigned char m, unsigned char sec)
+{
+    gm_h = h;
+    gm_mi = m;
+    gm_s = sec;
+    gm_clock_ok = 1;
+    fake_ticks = 1000;
+    tick_reset();
+}
+
+static void run_secs(unsigned int n)
+{
+    fake_ticks += (unsigned long) n * fake_hz;
+}
+
+static void test_tick(void)
+{
+    puts("wall clock");
+
+    /* A clock that never read does not advance and never repaints. */
+    gm_clock_ok = 0;
+    fake_ticks = 0;
+    tick_reset();
+    run_secs(120);
+    eq_int("no clock, no tick", tick_advance(), 0);
+
+    /* Inside the minute nothing on screen is wrong, so nothing is reported. */
+    set_clock(10, 15, 0);
+    run_secs(59);
+    eq_int("same minute", tick_advance(), 0);
+    eq_int("seconds kept", gm_s, 59);
+    eq_int("minute kept", gm_mi, 15);
+
+    /* One more second is the repaint. */
+    run_secs(1);
+    eq_int("minute bumped", tick_advance(), 1);
+    eq_int("minute is 16", gm_mi, 16);
+    eq_int("seconds wrapped", gm_s, 0);
+
+    /* Sub-second remainders carry rather than being thrown away: sixty calls
+       a second apart must land on exactly one minute, not fifty-nine. */
+    set_clock(10, 15, 0);
+    {
+        unsigned char i;
+        unsigned char bumps = 0;
+
+        for (i = 0; i < 60; i++) {
+            fake_ticks += (unsigned long) fake_hz + 1;   /* a tick of slop */
+            bumps = (unsigned char) (bumps + tick_advance());
+        }
+        eq_int("one bump in sixty", bumps, 1);
+        eq_int("minute is 16", gm_mi, 16);
+    }
+
+    /* The hour. */
+    set_clock(10, 59, 59);
+    run_secs(1);
+    eq_int("hour bumped", tick_advance(), 1);
+    eq_int("hour is 11", gm_h, 11);
+    eq_int("minute is 0", gm_mi, 0);
+
+    /* Midnight rolls the hour and asks for a resync rather than working out
+       what the date became -- nothing on this screen carries one. */
+    set_clock(23, 59, 59);
+    eq_int("not due yet", tick_due_resync(), 0);
+    run_secs(1);
+    eq_int("midnight bumped", tick_advance(), 1);
+    eq_int("hour is 0", gm_h, 0);
+    eq_int("midnight resyncs", tick_due_resync(), 1);
+
+    /* Half an hour of minutes is the resync interval. */
+    set_clock(1, 0, 0);
+    run_secs(29 * 60);
+    tick_advance();
+    eq_int("29 minutes is not due", tick_due_resync(), 0);
+    run_secs(60);
+    tick_advance();
+    eq_int("30 minutes is due", tick_due_resync(), 1);
+
+    /* A counter that went backwards is a wrap: give up on the interval rather
+       than stepping a negative number of seconds. */
+    set_clock(9, 0, 0);
+    fake_ticks = 10;
+    eq_int("wrap reports nothing", tick_advance(), 0);
+    eq_int("wrap keeps the time", gm_mi, 0);
+    run_secs(60);
+    eq_int("wrap rebaselines", tick_advance(), 1);
+    eq_int("and then advances", gm_mi, 1);
+
+    /* Away longer than an hour: do not step 3601 seconds one at a time, just
+       ask the device. */
+    set_clock(9, 0, 0);
+    run_secs(3601);
+    eq_int("long absence bumps", tick_advance(), 1);
+    eq_int("long absence resyncs", tick_due_resync(), 1);
+    eq_int("long absence does not step", gm_mi, 0);
+
+    /* clock_pump() paints exactly when the minute changed. */
+    set_clock(9, 0, 0);
+    clock_paints = 0;
+    run_secs(30);
+    clock_pump();
+    eq_int("no paint mid-minute", clock_paints, 0);
+    run_secs(30);
+    clock_pump();
+    eq_int("one paint on the minute", clock_paints, 1);
+
+    /* A slower counter steps the same seconds: the MS-DOS backend's 18 Hz is
+       not a special case anywhere but plat_fps(). */
+    fake_hz = 18;
+    set_clock(6, 30, 0);
+    run_secs(60);
+    eq_int("18 Hz bumps", tick_advance(), 1);
+    eq_int("18 Hz minute", gm_mi, 31);
+    fake_hz = 60;
+}
+
+/* ------------------------------------------------------------------ */
+
 int main(void)
 {
 #ifdef GM_RT_COLS
@@ -650,6 +903,8 @@ int main(void)
     test_body_width();
     test_date();
     test_form();
+    test_spill();
+    test_tick();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures != 0;

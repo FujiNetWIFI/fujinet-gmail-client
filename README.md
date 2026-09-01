@@ -97,29 +97,46 @@ intensity for unread rows, reverse video for the bars, and a real underline
 under the reader's subject — the one attribute no other adapter has.
 
 **Compose / reply / forward** — one form serves all three: a To and a Subject
-field, then the body as separate lines on the same editor (no auto-wrap;
-`RETURN` moves to the next line). Printable keys insert at the cursor,
-backspace deletes before it, and leaving with anything typed asks
-`Send? (Y/N)` — the close of the write channel is what actually sends.
+field, then the body as line fields on the same editor. Printable keys insert
+at the cursor, backspace deletes before it, `RETURN` moves down a line, and
+leaving with anything typed asks `Send? (Y/N)` — the close of the write channel
+is what actually sends.
 
-Forty columns:
+The body **wraps forward**: a line that fills pushes its trailing word down to
+the line below and the cursor goes with it, so typing straight through the
+right margin does the obvious thing. Nothing ever comes back up — a delete that
+pulled the next line's first word onto this one would rewrite text nobody
+touched, and `RETURN` here is a hard break the user typed, so there is no
+paragraph for a reflow to be about. A word longer than a whole line is
+hard-split a character at a time, the same answer `wrap.c` gives the reader.
+
+The body also **scrolls**: `FRM_NBODY` lines of storage behind a window of
+`FRM_VBODY`, which is what the screen has room for. `compose.c` owns both
+scrolls, horizontal and vertical, and hands each backend a windowed slice and a
+slot to paint it in — so a backend lays out `FRM_VBODY` rows and never learns
+how many the form actually holds. Growing the body is a constant in the
+`Makefile` and nothing anywhere else.
+
+Forty columns, twelve body rows of forty-eight:
 
 ```
-        Gmail  New message
+        Gmail  New message         14:32
  To   someone@example.com
  Subj Hello from an Atari
 
- The body, one line per row.
- RETURN moves down a line.
+ The body, wrapping as you type and
+ scrolling when it runs past the
+ twelfth row.
 
               Send? (Y/N)              <- after ESC with content
  RET:NEXT  ^v:FIELD  ESC:DONE
 ```
 
-Thirty-two, uppercase because the 6847 has nothing else:
+Thirty-two, uppercase because the 6847 has nothing else, six rows of
+twenty-four:
 
 ```
- REPLY
+ REPLY                      14:32
  TO
  SU
  THANKS, SEE YOU AT NOON.
@@ -157,7 +174,30 @@ tripping the device-side cap, which would poison the whole draft.
 
 **Splash / busy / error** — flat screens with the logo. The error screen names
 the failure and shows the raw codes beneath it (`open code 212 dev 144`), which
-is the difference between a reportable bug and "it just says error".
+is the difference between a reportable bug and "it just says error". The two
+write opens carry different stage names, `open` for a compose and `reply` for a
+reply, because they fail for entirely unrelated reasons: a compose open does no
+upstream work at all, and a reply open resolves the target message and can come
+back `170` when it no longer exists.
+
+**The wall clock** — `HH:MM` in local time, on the inbox, the reader and the
+compose form. `src/clock.c` reads the FujiNet once at boot and again every half
+hour; `src/tick.c` advances it off the machine's own frame counter in between,
+and repaints only when the displayed minute changes. It costs no extra device
+call: the time of day is four fields of the ISO string `clock.c` already parses
+for the timezone offset and the year.
+
+The obligation that comes with it is on the backends. A blocking key read is
+now a poll around `plat_vsync()` and `clock_pump()`, so the count keeps rising
+and the screen keeps repainting while a user sits on one — on the Apple II and
+the Adam, which count their own frames, the poll *is* the counter. What none of
+them cover is a transfer: nobody pumps anything while fujinet-lib is talking to
+the device, and on the CoCo the DriveWire read masks interrupts so `TIMER`
+itself stops. The half-hour resync is what bounds that drift, and the answer it
+resyncs to is the FujiNet's rather than this program's.
+
+There is no clock on the flat screens, which are exactly the screens that are up
+while a transfer is running: it would be showing a time that had stopped.
 
 ### Keys
 
@@ -180,7 +220,9 @@ exist. Compose works from an empty inbox too.
 Inside the form, printable keys type; `RETURN` moves to the next field, the
 vertical arrows move between fields, the horizontal ones move the cursor where
 the keyboard has them, backspace erases, and `ESC` leaves — silently when
-nothing was typed, through the `Send? (Y/N)` ask otherwise.
+nothing was typed, through the `Send? (Y/N)` ask otherwise. Moving past the
+bottom of the body window scrolls it; there is no separate key for scrolling,
+because the cursor is the only thing that ever needs to be on screen.
 
 The Atari's cursor keys need `Ctrl` held, which is a lot to ask while browsing a
 mailbox, so the bare keycaps those arrows live on — `-` `=` `+` `*` — work too.
@@ -374,7 +416,15 @@ line-accumulator overflow, wrapping, truncation and the epoch arithmetic — and
 the compose form: the exact draft bytes each mode emits (a bare-body reply is
 precisely `"\n" + body`), per-mode validation, the `Fwd:` prefill, and the
 forward truncation budget, which the wide shapes genuinely overflow and the
-narrow ones prove is never tripped by accident. These are the fiddliest parts
+narrow ones prove is never tripped by accident.
+
+They also cover the two things added since: the form's wrap, where every
+assertion is written against `FRM_BODY_COLS` rather than a literal so that
+running six shapes actually buys something, and the wall clock, where
+`plat_ticks()` is a variable this file sets and a day of it therefore costs
+nothing. The minute, the hour, midnight, a counter that wrapped and an absence
+longer than an hour are all boundaries it is much better to assert than to
+reason about. These are the fiddliest parts
 of the program and they have no platform dependency, so they run natively
 instead of through a cross-compile and an emulator:
 
@@ -599,6 +649,19 @@ read by calling `KEYBDV` directly (`src/atari/key.s`): cc65's `cgetc()` calls
 `setcursor()`, which writes a stale character back over the previous cursor
 cell and clears the inverse-video bit on the current one.
 
+**`KEYBDV` blocks, so the waits poll around it.** The wall clock has to advance
+and repaint while a screen sits waiting, and nothing does either from inside the
+firmware read. `CH` (`$02FC`) is where the keyboard IRQ leaves the raw code, so
+"nothing pending" costs one load and the wait runs a frame at a time through
+`plat_vsync()` and `clock_pump()`. `plat_ticks()` reads `RTCLOK`, which the OS
+vertical blank keeps advancing through an SIO transfer as well — the one bus
+here whose clock does not lose the length of a fetch.
+
+A headless build is the exception and blocks in the real read. That is where
+`tools/atari-shot.sh` sets its breakpoint: once the scripted keys are spent the
+program has to come to rest somewhere the monitor can catch it, and a polling
+loop would spin until the capture timed out with nothing to show.
+
 **SIO.** Every network and fuji call is bracketed by `plat_net_begin()` /
 `plat_net_end()`, which suppress display list interrupts for the duration —
 SIO runs with interrupts disabled and is timing critical. Nothing is lost
@@ -613,8 +676,9 @@ something (136 EOF, 167, 170, 210, 212) is distinct from either.
 **Memory** (48K/64K machine, `cfg/atari.cfg`):
 
 ```
-$2000-$8D12   program: code, rodata, data, bss
-    ...       C stack, growing down from $B41F
+$2000-$A995   program: code, rodata, data, bss
+    ...       650 bytes spare
+$AC20-$B41F   C stack, growing down from $B41F
 $B420-$BC1F   reserved by __RESERVED_MEMORY__
 $B800-$BBFF     player/missile buffer, 1K aligned, PMBASE = $B8
 $BC20-$BC3F   OS display list      (borrowed, interrupt bits only)
@@ -622,7 +686,16 @@ $BC40-$BFFF   OS screen memory     (written directly)
 ```
 
 Check `__BSS_RUN__ + __BSS_SIZE__` against `$AC20` in `r2r/atari/gmail.map`
-before raising `BODY_ROWS`.
+before raising `BODY_ROWS`, and check the `-DGM_FAKE_DATA` build as well as the
+product — the canned wire data links alongside the real transport, so the two
+are within a few dozen bytes of each other here and either can be the one that
+runs out.
+
+This is the machine with the least room, and `BODY_ROWS` is where it comes
+from. 300 → 224 is what pays for a compose form that holds four windows
+(`FRM_NBODY` 12 → 48, 1,404 bytes) plus the wrap, the scroll and the wall
+clock. The reader keeps 224 × 40 = 8,960 characters, twelve screens of a very
+long message, which was never the thing anybody complained about.
 
 ---
 
@@ -681,8 +754,11 @@ is open. It is `blit.s` and not `screen.s` because the build globs `*.c` and
 are empty. The Atari uses them to suppress display list interrupts, because SIO
 runs with interrupts disabled and is timing critical; there is no interrupt
 handler, frame counter or sound here to suppress, and SmartPort is a subroutine
-call into card firmware. For the same reason there is no `timer.c`: the blocking
-key read is a bare spin, because nothing on screen changes until a key arrives.
+call into card firmware. The `timer.c` here is not a suppressor but a counter:
+this machine has no free-running tick of its own, so `plat_vsync()` keeps one,
+and the key waits poll around it rather than spinning on the keyboard alone.
+The cost is that the count stops during a SmartPort transfer, which the
+half-hour resync absorbs.
 
 **`fn_default_timeout` does nothing on this bus, and the error path had to learn
 that.** The only reader in fujinet-lib is the Atari bus layer, where it becomes
@@ -704,22 +780,19 @@ leaving room for ProDOS file buffers this client never opens — fujinet-lib tal
 SmartPort directly and nothing here touches the filesystem. `$BF00` is the
 ProDOS global page, the real ceiling.
 
-**Memory** (`r2r/apple2enh/gmail.map`):
+**Memory** — check `r2r/apple2enh/gmail.map`; `ld65` reports an overflow of
+the `BSS` area as a warning followed by a hard link error, so the ceiling is
+not something you have to work out by hand.
 
-```
-$0803-$53CA   program: code, rodata, data, init      (19,400 bytes)
-$53CB-$B5E1   bss                                    (25,111 bytes)
-    ...       287 bytes spare
-$B700-$BEFF   C stack, __STACKSIZE__ = 2048
-$BF00         __HIMEM__ -- the ProDOS global page
-```
-
-`gm_body` is 18,328 of that BSS. `BODY_ROWS` comes *down* from the Atari's 300
-even though the buffer grows, because at 78 columns a message needs about half
-the rows: 232 × 78 holds 18,096 characters against the Atari's 12,000. It came
-down once more, 240 → 232, when the compose form arrived — the ~1.35K `frmbuf`
-overflowed BSS by 346 bytes. Check the map before raising anything, and mind
-that `__STACKSIZE__` trades directly against BSS.
+`gm_body` is the largest object in the program. `BODY_ROWS` comes *down* from
+the Atari's even though the buffer grows, because at 78 columns a message needs
+about half the rows: 176 × 78 holds 13,728 characters against the Atari's
+8,960. It has come down twice. First 240 → 232, when the compose form arrived
+and the ~1.35K `frmbuf` overflowed BSS by 346 bytes. Then 232 → 176, when the
+form learned to hold four windows instead of one: `FRM_NBODY` 14 → 42 is 2,156
+bytes at 77 bytes a line, and the wrap, the scroll and the wall clock are most
+of another 800. Check the map before raising anything, and mind that
+`__STACKSIZE__` trades directly against BSS.
 
 ---
 
@@ -840,11 +913,15 @@ build links the canned wire data *alongside* the real transport and ends about
 left, which would have meant the next string added to a screen breaking
 `tools/coco-shot.sh` while the product still fitted. Check both.
 
-The compose form is why `BODY_ROWS` sits at 208 now, down from the 288 the
-reader-only client shipped with: the form engine, the send path and their
-screens are ~2.6K of 6809 code, the harness build overflowed by 521 bytes at
-240 rows, and 224 would have left it 7 — one string from breaking again. The
-Makefile carries the ladder down from here.
+The compose form is why `BODY_ROWS` sits at 142 now, down from the 288 the
+reader-only client shipped with. The form engine, the send path and their
+screens took it to 208 first — ~2.6K of 6809 code, and the harness build
+overflowed by 521 bytes at 240 rows. Wrapping, a body four windows deep and the
+wall clock took the rest: `FRM_NBODY` 6 → 24 is 594 bytes on its own, the new
+code about as much again, and 142 rows leaves the harness 634. That is still
+about eleven pages of a message on a twelve-row screen, and the reader was
+never the thing anybody complained about. The Makefile carries the ladder down
+from here.
 
 ---
 
@@ -1184,12 +1261,13 @@ Inherited from the adapter and the original, not accidents of the port:
   including newer ones you skipped. Gmail's list order is not strictly by
   timestamp either, so an occasional entry can flip. The date column is what
   makes any of that visible — it is the same value the mark is compared against.
-- **Dates are UTC without a clock.** The offset comes from one
-  `clock_get_time` at boot, so a FujiNet with no clock device registered, or an
-  unset `[General] timezone`, labels everything in UTC. Nothing else breaks. On
-  the Adam that call goes to AdamNet device `0x03` directly, because fujinet-lib
-  has no clock for this bus — under ADAMEm it needs `0x03` in the forwarding
-  mask, or the same thing happens for the same reason.
+- **Dates are UTC without a clock, and there is no wall clock either.** Both
+  come from `clock_get_time`, so a FujiNet with no clock device registered, or
+  an unset `[General] timezone`, labels everything in UTC and shows no `HH:MM`
+  at all. Nothing else breaks. On the Adam that call goes to AdamNet device
+  `0x03` directly, because fujinet-lib has no clock for this bus — under ADAMEm
+  it needs `0x03` in the forwarding mask, or the same thing happens for the
+  same reason.
 - **Slow first paint.** A 16-entry listing is roughly nineteen sequential
   upstream HTTPS round trips inside a single open, and can take 30–60 seconds.
   The CoCo asks for 11 at a time, because that is what its screen shows.
@@ -1197,7 +1275,24 @@ Inherited from the adapter and the original, not accidents of the port:
   `?` per run; there is no RFC 2047 or UTF-8 decoding anywhere.
 - **HTML-only messages show raw markup** — the adapter falls back to
   `text/html` without stripping tags.
-- Message numbers are positions, not stable ids: new mail shifts them.
+- **Message numbers are positions, not stable ids: new mail shifts them.** The
+  adapter resolves a number against the folder's current message count, so a
+  reply is only as safe as the listing it was launched from. Reading a message
+  and then spending several minutes typing a reply leaves a window in which the
+  inbox can lose a message and the send comes back `170` — the error screen
+  says to refresh, and nothing typed is lost when it does. A reply retargeting
+  a *different* message rather than failing is the same hazard with a worse
+  ending, and the only real fix for either is a stable id on the wire.
+- **A body line that will not wrap is refused.** The form's wrap is one line
+  deep: when the line below is already too full to take the word, the keystroke
+  is dropped exactly as it was before there was any wrapping. Typing forward
+  through a fresh reply never meets this; going back and inserting into the
+  middle of a full block can.
+- **The wall clock drifts between resyncs.** Nothing counts frames while
+  fujinet-lib is talking to the device, and on the CoCo the DriveWire read
+  masks the interrupt that maintains `TIMER` at all, so every fetch costs the
+  clock its own duration. The half-hour resync bounds it. A PAL CoCo drifts a
+  further 20%, because a 6847 cannot be asked which it is.
 - Bodies longer than `BODY_ROWS` wrapped rows are truncated, flagged with a
   trailing `+` on the page indicator.
 
@@ -1217,7 +1312,9 @@ src/            portable core
   wrap.c        greedy word wrap
   sanitize.c    charset clamping
   date.c        epoch seconds to a rendered date column
-  clock.c       the UTC offset and the current year, read once at boot
+  clock.c       the UTC offset, the year and the time of day, from one
+                device read at boot and every half hour after it
+  tick.c        the wall clock between those reads, off the frame counter
   hwm.c         the read/unread high-water mark, in an appkey
 src/atari/      Atari 8-bit backend
   platform.h    geometry, palette, internal API
@@ -1226,28 +1323,32 @@ src/atari/      Atari 8-bit backend
   dli.c         colour bands
   dlihw.s       the interrupts and the vertical blank hook
   pmg.c         the player/missile "M"
-  input.c       key mapping
-  key.s         the blocking read
+  timer.c       RTCLOK, and the PAL/NTSC frame rate
+  input.c       key mapping, and the poll the key waits spin in
+  key.s         the read itself, KEYBDV without cc65's cursor
 src/apple2enh/  Apple //e (enhanced) backend
   platform.h    geometry, MouseText codes, internal API
   screen.c      the 80-column blitter and the screen-code mapping
   blit.s        the aux/main column split
   ui.c          every painter
   logo.c        the "M" in one bit
-  input.c       key mapping and the blocking read
+  timer.c       the frame counter this machine does not have of its own
+  input.c       key mapping and the key poll
 src/coco/       Tandy Color Computer backend
   platform.h    geometry, the SG4 macros, internal API
   screen.c      the 32x16 blitter, plus plat_init/shutdown/net_begin/net_end
   ui.c          every painter
   logo.c        the "M" as semigraphics byte tables
-  input.c       key mapping, the frame wait and the blocking read
+  timer.c       the frame wait, and TIMER extended past its 16-bit wrap
+  input.c       key mapping and the key poll
   include/      <string.h>, <stdlib.h> and <stdint.h> shims for CMOC
 src/adam/       Coleco Adam backend
   platform.h    geometry, the GRAPHICS II address macros, the palette
   screen.c      the attribute-plane blitter, plus plat_init/shutdown/net_*
   ui.c          every painter, and the three SmartKey legend sets
   logo.c        the Gmail "M" as four hardware sprites
-  input.c       SmartKeys, key mapping, the frame wait and the blocking read
+  timer.c       the frame wait -- a HALT on the VDP's NMI -- and the count
+  input.c       SmartKeys, key mapping and the key poll
   clock_adam.c  clock_get_time() -- fujinet-lib has none for this bus
   fuji_adam.c   the adapter probe, whose library version inverts its bool
 src/msdos/      MS-DOS backend
@@ -1255,7 +1356,8 @@ src/msdos/      MS-DOS backend
   screen.c      the video probe, the attribute tables and the direct blitter
   ui.c          every painter, at both widths
   logo.c        the "M" as coloured CP437 blocks
-  input.c       INT 16h key mapping and the blocking read
+  timer.c       the BIOS tick at 0040:006C, 18.2 Hz
+  input.c       INT 16h key mapping and the key poll
   clock_msdos.c clock_get_time() -- fujinet-lib has none for this bus
   fuji_msdos.c  the adapter probe, guarding a null INT F5 vector
   net_msdos.c   network_error/read/write and the open, replacing library bugs

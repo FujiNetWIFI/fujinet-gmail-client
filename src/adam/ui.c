@@ -66,6 +66,25 @@ static char detbuf[ENT_NAME_LEN + ENT_SUBJ_LEN + 4];
 static char wrapped[2][SCR_COLS + 1];
 static char datebuf[ENT_DATE_LEN];
 
+/*
+ * Where the wall clock goes on the screen that is up, or CLK_NONE.
+ *
+ * Three slots, because the three screens have three different spare cells.
+ * The inbox and the form both paint a two-row app bar and only use the first
+ * of them, so the clock takes the right-hand end of the second. The reader has
+ * no app bar to spare -- row 0 is sender against date and rows 1-2 are the
+ * subject -- so it goes on the rule row, to the left of the page indicator.
+ *
+ * The flat screens clear it: they are the ones up while AdamNet is running,
+ * which is both the time nothing is pumping the clock and the time a repaint
+ * is least welcome.
+ */
+#define CLK_NONE    0xFF
+static unsigned char clk_row = CLK_NONE;
+static unsigned char clk_col;
+static unsigned char clk_attr;
+static char          clkbuf[6];
+
 /* ------------------------------------------------------------------ */
 /* SmartKey legends                                                    */
 /* ------------------------------------------------------------------ */
@@ -114,8 +133,26 @@ static const struct sk_set sk_flat = {
 /* Flat screens                                                        */
 /* ------------------------------------------------------------------ */
 
+/* HH:MM, right-aligned at clk_col on clk_row. Hand-rolled rather than utoa'd
+   because a leading zero is not optional in a clock. */
+void ui_clock(void)
+{
+    if (clk_row == CLK_NONE || !gm_clock_ok)
+        return;
+
+    clkbuf[0] = (char) ('0' + gm_h / 10);
+    clkbuf[1] = (char) ('0' + gm_h % 10);
+    clkbuf[2] = ':';
+    clkbuf[3] = (char) ('0' + gm_mi / 10);
+    clkbuf[4] = (char) ('0' + gm_mi % 10);
+    clkbuf[5] = '\0';
+
+    scr_right(clk_row, clk_col, clkbuf, clk_attr);
+}
+
 static void flat_screen(void)
 {
+    clk_row = CLK_NONE;
     scr_clear();
     logo_large(FLAT_LOGO_ROW, FLAT_LOGO_COL);
     sk_bind(&sk_flat);
@@ -171,6 +208,7 @@ void ui_error(unsigned char code)
         break;
     case GM_NOTFOUND:
         l1 = "Message not found";
+        l2 = "refresh the inbox";
         break;
     case GM_REJECTED:
         l1 = "Draft rejected";
@@ -337,6 +375,11 @@ void ui_inbox(void)
     scr_text(0, HDR_TEXT_COL, "Gmail", A_HEADER);
     scr_right(0, RIGHT_COL, "Inbox", A_HDR_DIM);
 
+    clk_row = 1;                /* the app bar's spare row */
+    clk_col = RIGHT_COL;
+    clk_attr = A_HDR_DIM;
+    ui_clock();
+
     draw_rule();
 
     if (gm_count == 0)
@@ -444,6 +487,13 @@ void ui_message(unsigned int top)
         strcat(sbuf, "+");
     scr_right(MSG_RULE_ROW, RIGHT_COL, sbuf, A_RULE);
 
+    /* On the rule row, clear of the page indicator: this screen has no spare
+       app-bar row, and the widest indicator is "999/999+". */
+    clk_row = MSG_RULE_ROW;
+    clk_col = (unsigned char) (RIGHT_COL - 9);
+    clk_attr = A_RULE;
+    ui_clock();
+
     sk_bind(&sk_reader);
 }
 
@@ -462,13 +512,13 @@ void ui_message(unsigned int top)
  */
 
 #define FRM_BODY_TOP    6
-#define FRM_HINT_ROW    (FRM_BODY_TOP + FRM_NBODY + 1)
+#define FRM_HINT_ROW    (FRM_BODY_TOP + FRM_VBODY + 1)
 #define FRM_MSG_ROW     (FRM_HINT_ROW + 1)
 #define FRM_HDR_COL     3       /* TO/SUBJECT value column */
 #define FRM_HDR_W       29      /* their window: cols 3..31 */
 
 #if FRM_MSG_ROW > 20
-#error "the form no longer fits above the SmartKeys band -- lower FRM_NBODY"
+#error "the form no longer fits above the SmartKeys band -- lower FRM_VBODY"
 #endif
 
 static unsigned char frm_row(unsigned char f)
@@ -504,6 +554,11 @@ void ui_form(unsigned char mode)
                                                 : "New", A_HDR_DIM);
 
     scr_field(RULE_ROW, 0, "", SCR_COLS, A_RULE);
+
+    clk_row = 1;                /* the app bar's spare row, as on the inbox */
+    clk_col = RIGHT_COL;
+    clk_attr = A_HDR_DIM;
+    ui_clock();
 
     scr_text(3, 0, "To", A_DIM);
     scr_text(4, 0, "Su", A_DIM);

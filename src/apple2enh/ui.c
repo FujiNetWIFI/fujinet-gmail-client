@@ -61,6 +61,20 @@ static char detbuf[ENT_NAME_LEN + ENT_SUBJ_LEN + 4];
 static char wrapped[2][SCR_COLS + 1];
 static char datebuf[ENT_DATE_LEN];
 
+/*
+ * Where the wall clock goes on the screen that is up, or CLK_NONE. All three
+ * banded screens put it in the app bar, so it is inverse everywhere; only the
+ * column moves, because the reader's bar already ends in the message's date and
+ * the clock stands to the left of it rather than fighting for the corner.
+ *
+ * The flat screens clear it: they are the ones up while SmartPort is running,
+ * which is both the time nothing is pumping the clock and the time a repaint
+ * is least welcome.
+ */
+#define CLK_NONE    0xFF
+static unsigned char clk_col = CLK_NONE;
+static char          clkbuf[6];
+
 /* ------------------------------------------------------------------ */
 /* Small helpers                                                       */
 /* ------------------------------------------------------------------ */
@@ -95,8 +109,26 @@ static void footer(const char *hints, const char *right)
 
 static void flat_screen(void)
 {
+    clk_col = CLK_NONE;
     scr_clear();
     logo_large(SPLASH_LOGO_ROW, SPLASH_LOGO_COL);
+}
+
+/* HH:MM, right-aligned at clk_col in the app bar. Hand-rolled rather than
+   utoa'd because a leading zero is not optional in a clock. */
+void ui_clock(void)
+{
+    if (clk_col == CLK_NONE || !gm_clock_ok)
+        return;
+
+    clkbuf[0] = (char) ('0' + gm_h / 10);
+    clkbuf[1] = (char) ('0' + gm_h % 10);
+    clkbuf[2] = ':';
+    clkbuf[3] = (char) ('0' + gm_mi / 10);
+    clkbuf[4] = (char) ('0' + gm_mi % 10);
+    clkbuf[5] = '\0';
+
+    scr_right(0, clk_col, clkbuf, 1);
 }
 
 void ui_splash(void)
@@ -150,6 +182,7 @@ void ui_error(unsigned char code)
         break;
     case GM_NOTFOUND:
         l1 = "Message not found";
+        l2 = "refresh the inbox";
         break;
     case GM_REJECTED:
         l1 = "Draft rejected";
@@ -291,6 +324,9 @@ void ui_inbox(void)
     scr_text(0, HDR_TEXT_COL, "Gmail", 1);
     scr_text(0, HDR_TEXT_COL + 8, "Inbox", 1);
 
+    clk_col = RIGHT_COL;
+    ui_clock();
+
     page_indicator();
     scr_right(2, RIGHT_COL, sbuf, 0);
 
@@ -337,6 +373,11 @@ void ui_message(unsigned int top)
 
     date_fmt(datebuf, gm_index[gm_sel].ts);
     scr_right(0, RIGHT_COL, datebuf, 1);
+
+    /* The bar's corner already carries the message's own date here, so the
+       clock stands to the left of it rather than fighting for the corner. */
+    clk_col = (unsigned char) (RIGHT_COL - ENT_DATE_LEN - 1);
+    ui_clock();
 
     nsub = wrap_text(gm_index[gm_sel].subject, wrapped[0], 2,
                      SCR_COLS - 2, SCR_COLS + 1);
@@ -393,12 +434,12 @@ void ui_message(unsigned int top)
  */
 
 #define FRM_BODY_TOP    6
-#define FRM_HINT_ROW    (FRM_BODY_TOP + FRM_NBODY + 1)
+#define FRM_HINT_ROW    (FRM_BODY_TOP + FRM_VBODY + 1)
 #define FRM_MSG_ROW     (FRM_HINT_ROW + 1)
 #define FRM_VAL_COL     10      /* TO/SUBJECT value column */
 
 #if FRM_MSG_ROW > 22
-#error "the form no longer fits above the footer -- lower FRM_NBODY"
+#error "the form no longer fits above the footer -- lower FRM_VBODY"
 #endif
 
 static unsigned char frm_row(unsigned char f)
@@ -432,6 +473,9 @@ void ui_form(unsigned char mode)
     scr_text(0, HDR_TEXT_COL, (mode == FRM_REPLY) ? "Reply"
                             : (mode == FRM_FWD)   ? "Forward"
                                                   : "New message", 1);
+
+    clk_col = RIGHT_COL;
+    ui_clock();
 
     scr_text(3, 2, "To", 0);
     scr_text(4, 2, "Subject", 0);

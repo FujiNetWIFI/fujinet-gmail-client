@@ -6,10 +6,15 @@
  * The editor is modeless. One field is active; printable keys insert at the
  * cursor, E_BS deletes before it, E_UP/E_DOWN/E_ENTER move between fields,
  * and E_DONE leaves -- silently when nothing was touched, through a send?
- * yes/no ask otherwise. Horizontal scrolling lives here, not in the
+ * yes/no ask otherwise. Scrolling lives here in both directions, not in the
  * backends: ui_form_row() is handed the visible slice with the cursor
  * column already computed, so a backend paints what it is given and cannot
  * disagree with the engine about where the window starts.
+ *
+ * Vertically that means the form holds FRM_NBODY body lines and shows
+ * FRM_VBODY of them, starting at btop. A backend lays out FRM_VBODY rows and
+ * is told which *slot* to paint, never which line -- so growing the body
+ * costs a constant in the Makefile and nothing anywhere else.
  *
  * The network is touched only at send time. A cancel costs nothing, and a
  * reply's target is resolved by the adapter at that open, as late as
@@ -23,19 +28,45 @@
 
 static unsigned char cur_f;     /* the active field */
 static unsigned char cpos;      /* cursor position within it */
+static unsigned char btop;      /* first body line in the window */
 static unsigned char msg_up;    /* a ui_form_msg() is on screen */
 
 /* try_send outcomes. */
 #define SV_STAY     0           /* validation or network failure -- still here */
 #define SV_SENT     1
 
+/*
+ * Field f's screen slot, or FRM_NFIELDS when it is scrolled out of the body
+ * window. The headers are always on screen and always their own slot; a body
+ * line is a slot only while it is inside [btop, btop + FRM_VBODY).
+ */
+static unsigned char slot_of(unsigned char f)
+{
+    unsigned char b;
+
+    if (f < F_BODY0)
+        return f;
+
+    b = (unsigned char) (f - F_BODY0);
+    if (b < btop || (unsigned char) (b - btop) >= FRM_VBODY)
+        return FRM_NFIELDS;
+
+    return (unsigned char) (F_BODY0 + (b - btop));
+}
+
 static void draw_row(unsigned char f)
 {
     const char   *s = form_field_ptr(f);
-    unsigned char w = ui_form_width(f);
+    unsigned char slot = slot_of(f);
+    unsigned char w;
     unsigned char act = (unsigned char) (f == cur_f);
     unsigned char off = 0;
     unsigned char n;
+
+    if (slot == FRM_NFIELDS)
+        return;                 /* scrolled out -- nothing to paint it into */
+
+    w = ui_form_width(slot);
 
     if (act && cpos >= w)
         off = (unsigned char) (cpos - w + 1);
@@ -49,15 +80,51 @@ static void draw_row(unsigned char f)
     memcpy(frm.line, s, n);
     frm.line[n] = '\0';
 
-    ui_form_row(f, frm.line, act ? (unsigned char) (cpos - off) : 0, act);
+    ui_form_row(slot, frm.line, act ? (unsigned char) (cpos - off) : 0, act);
+}
+
+/* Every visible body row. A scroll moves all of them and a spill can rewrite
+   several, so there is nothing to be gained by tracking which ones changed. */
+static void draw_body(void)
+{
+    unsigned char i;
+
+    for (i = 0; i < FRM_VBODY; i++)
+        draw_row((unsigned char) (F_BODY0 + btop + i));
 }
 
 static void draw_all(void)
 {
-    unsigned char f;
+    draw_row(F_TO);
+    draw_row(F_SUBJ);
+    draw_body();
+}
 
-    for (f = 0; f < FRM_NFIELDS; f++)
-        draw_row(f);
+/*
+ * Bring field f into the body window. Returns 1 when the window moved, which
+ * is when the whole body has to be repainted rather than the row or two the
+ * cursor touched. btop is clamped so the window never runs off the end of
+ * storage, which is what lets draw_body() paint FRM_VBODY rows unconditionally.
+ */
+static unsigned char scroll_to(unsigned char f)
+{
+    unsigned char b;
+    unsigned char top = btop;
+
+    if (f < F_BODY0)
+        return 0;               /* the headers are always on screen */
+
+    b = (unsigned char) (f - F_BODY0);
+    if (b < top)
+        top = b;
+    else if ((unsigned char) (b - top) >= FRM_VBODY)
+        top = (unsigned char) (b - FRM_VBODY + 1);
+
+    if (top == btop)
+        return 0;
+
+    btop = top;
+    return 1;
 }
 
 static void clear_msg(void)
@@ -76,18 +143,60 @@ static void set_field(unsigned char f)
 
     cur_f = f;
     cpos = (unsigned char) strlen(form_field_ptr(f));
+
+    if (scroll_to(f)) {
+        /* The window moved, so every body row is wrong. A header the cursor
+           just left is not in it and still has an inverse bar to lose. */
+        draw_body();
+        if (old < F_BODY0)
+            draw_row(old);
+        return;
+    }
+
     if (old != f)
         draw_row(old);
     draw_row(f);
 }
 
+/*
+ * A full field is where the wrap lives. The headers scroll instead: an address
+ * or a subject is one line by definition and there is nowhere for a second one
+ * to go. A body line pushes its trailing word down and, if the cursor was in
+ * that word, follows it -- which is what makes typing straight through the
+ * right margin do the obvious thing.
+ *
+ * The loop is for the case where the word lands on a line that is itself now
+ * full: each pass either frees room on the line the cursor is on or moves the
+ * cursor one line further down, so it always reaches a line with room or the
+ * bottom of the body.
+ */
 static void ins_ch(char c)
 {
     char         *s = form_field_ptr(cur_f);
     unsigned char len = (unsigned char) strlen(s);
+    unsigned char spilled = 0;
 
-    if (len >= form_field_max(cur_f))
-        return;
+    while (len >= form_field_max(cur_f)) {
+        unsigned char ln;
+
+        if (cur_f < F_BODY0)
+            return;
+
+        ln = (unsigned char) (cur_f - F_BODY0);
+        if (!form_body_spill(&ln, &cpos)) {
+            if (spilled)
+                draw_body();    /* an earlier pass did move text */
+            return;
+        }
+
+        frm_dirty[cur_f] = 1;   /* the line the word left changed too */
+        cur_f = (unsigned char) (F_BODY0 + ln);
+        (void) scroll_to(cur_f);
+        spilled = 1;
+
+        s = form_field_ptr(cur_f);
+        len = (unsigned char) strlen(s);
+    }
 
     s += cpos;
     memmove(s + 1, s, (unsigned char) (len - cpos + 1));
@@ -95,7 +204,11 @@ static void ins_ch(char c)
     cpos++;
 
     frm_dirty[cur_f] = 1;
-    draw_row(cur_f);
+
+    if (spilled)
+        draw_body();
+    else
+        draw_row(cur_f);
 }
 
 static void del_ch(void)
@@ -161,6 +274,7 @@ static void runform(unsigned char mode)
        typing starts there; everywhere else the recipient comes first. */
     cur_f = (unsigned char) ((mode == FRM_REPLY) ? F_BODY0 : F_TO);
     cpos = (unsigned char) strlen(form_field_ptr(cur_f));
+    btop = 0;
     msg_up = 0;
 
     ui_form(mode);

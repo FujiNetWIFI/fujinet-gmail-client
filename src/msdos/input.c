@@ -19,6 +19,7 @@
  * says Q:QUIT because that is what actually quits.
  */
 
+#include <bios.h>
 #include <dos.h>
 #ifdef GM_SHOT
 #include <stdlib.h>
@@ -88,6 +89,30 @@ static unsigned int rawkey(void)
     return r.x.ax;
 }
 
+/*
+ * The wait every blocking read is built on.
+ *
+ * INT 16h AH=0 parks the CPU inside the BIOS until a key arrives, and the BIOS
+ * tick goes on counting through that -- so the clock would stay right, but
+ * nothing would repaint it. Polling around plat_vsync() gives the wall clock
+ * its chance to redraw eighteen times a second, at the cost of a tick's
+ * latency on a keystroke: a fifty-fifth of a second, and not detectable.
+ *
+ * _bios_keybrd(_KEYBRD_READY) is INT 16h AH=1 and nothing else, which is the
+ * matching half of the AH=0 read above. kbhit() would be the portable spelling
+ * but its DOS implementation is free to go through the operating system's
+ * console instead, and the two do not agree about extended keys.
+ */
+static unsigned int key_wait(void)
+{
+    while (!_bios_keybrd(_KEYBRD_READY)) {
+        plat_vsync();
+        clock_pump();
+    }
+
+    return rawkey();
+}
+
 static unsigned char map(unsigned int ax)
 {
     unsigned char al = (unsigned char) (ax & 0xFF);
@@ -118,14 +143,6 @@ static unsigned char map(unsigned int ax)
     return K_NONE;
 }
 
-/*
- * Blocking, and blocking is all this client ever needs.
- *
- * The calendar backend spins through plat_vsync() here because it keeps its
- * own frame counter and a wall clock that has to advance while a screen
- * waits. A mailbox has neither: the date column is resolved once at boot and
- * nothing on screen changes until a key arrives.
- */
 unsigned char plat_getkey(void)
 {
 #if defined(GM_FAKE_KEYS) || defined(GM_FAKE_KEYS_STR)
@@ -144,7 +161,7 @@ unsigned char plat_getkey(void)
 #endif
 
     for (;;) {
-        unsigned char k = map(rawkey());
+        unsigned char k = map(key_wait());
         if (k != K_NONE)
             return k;
     }
@@ -156,7 +173,7 @@ void plat_anykey(void)
     scr_snapshot();
     exit(0);
 #endif
-    rawkey();
+    key_wait();
 }
 
 /*
@@ -209,7 +226,7 @@ unsigned char plat_getch(void)
 #endif
 
     for (;;) {
-        unsigned char c = mapch(rawkey());
+        unsigned char c = mapch(key_wait());
         if (c)
             return c;
     }

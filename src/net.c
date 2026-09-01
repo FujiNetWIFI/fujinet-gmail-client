@@ -487,9 +487,14 @@ unsigned char gm_send_begin(unsigned char reply, const char *msgnum)
     wr_failed = 0;
 
     if (reply) {
-        /* Exactly the spec the body was fetched with: the adapter numbers
-           messages within the folder, and the target is snapshotted at
-           this open so renumbering underneath cannot retarget it. */
+        /*
+         * Exactly the spec the body was fetched with. The adapter snapshots
+         * the target at this open, so nothing can retarget it between here
+         * and the commit at close -- but the number is a *position* in the
+         * folder and not an id, and this open happens after the user has
+         * spent minutes typing. An inbox that lost a message in the meantime
+         * answers 170, which is why the error screen says to refresh.
+         */
         build_body_url(msgnum);
     } else {
         /* Compose is the bare scheme -- no folder, no message. */
@@ -498,9 +503,16 @@ unsigned char gm_send_begin(unsigned char reply, const char *msgnum)
 
     plat_net_begin();
 
-    /* A reply open fetches the target's headers upstream before it
-       answers, so it gets the same widened SIO timeout as a fetch. */
-    gm_stage = "open";
+    /*
+     * A reply open fetches the target's headers upstream before it answers,
+     * so it gets the same widened SIO timeout as a fetch.
+     *
+     * It also gets its own stage name. The two write opens fail for entirely
+     * different reasons -- a compose open does no upstream work at all and a
+     * reply open resolves the message -- and "reply code 170" on the error
+     * screen says which one it was without costing a byte of RAM.
+     */
+    gm_stage = reply ? "reply" : "open";
     fn_default_timeout = TMO_LONG;
     code = network_open(url, MB_MODE_WRITE, 0);
     fn_default_timeout = TMO_NORM;

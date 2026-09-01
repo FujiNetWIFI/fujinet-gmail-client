@@ -40,6 +40,20 @@ static unsigned char have_fujinet(void)
 #endif
 }
 
+/*
+ * A resync is a device call, so it is taken between keys -- never with a form
+ * up and never with a channel open. tick.c only ever asks for one; this is the
+ * only place that takes one.
+ */
+static void clock_resync(void)
+{
+    if (!tick_due_resync())
+        return;
+
+    clock_load();
+    ui_clock();
+}
+
 static void read_message(void)
 {
     unsigned int maxtop;
@@ -61,6 +75,7 @@ static void read_message(void)
 
     for (;;) {
         k = plat_getkey();
+        clock_resync();
         maxtop = (gm_body_rows > MSG_ROWS) ? (gm_body_rows - MSG_ROWS) : 0U;
 
         switch (k) {
@@ -160,6 +175,7 @@ int main(void)
         refetch = 0;
         while (!refetch) {
             k = plat_getkey();
+            clock_resync();
             old = gm_sel;
 
             switch (k) {

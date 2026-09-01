@@ -41,6 +41,23 @@
 
 /* Set by ui_geom() once screen.c knows the width. */
 static unsigned char right_col;                 /* last text column       */
+
+/*
+ * Where the wall clock goes on the screen that is up, or CLK_NONE.
+ *
+ * The app bar's right-hand end on all three screens, except a wide reader,
+ * where that corner already carries the message's own date and the clock
+ * stands to the left of it. At forty columns the reader has no date on the bar
+ * at all -- "From: " and a 32-character name fill it -- so the clock takes the
+ * corner there too, five columns being cheaper than thirteen.
+ *
+ * The flat screens clear it: they are the ones up while the driver is talking
+ * to the adapter, which is both the time nothing is pumping the clock and the
+ * time a repaint is least welcome.
+ */
+#define CLK_NONE    0xFF
+static unsigned char clk_col = CLK_NONE;
+static char          clkbuf[6];
 static unsigned char col_date, w_date;          /* 80 columns only        */
 static unsigned char col_from, w_from;
 static unsigned char col_subj, w_subj;
@@ -87,8 +104,26 @@ static void footer(const char *hints, const char *right)
 /* Transient screens                                                   */
 /* ------------------------------------------------------------------ */
 
+/* HH:MM, right-aligned at clk_col in the app bar. Hand-rolled rather than
+   utoa'd because a leading zero is not optional in a clock. */
+void ui_clock(void)
+{
+    if (clk_col == CLK_NONE || !gm_clock_ok)
+        return;
+
+    clkbuf[0] = (char) ('0' + gm_h / 10);
+    clkbuf[1] = (char) ('0' + gm_h % 10);
+    clkbuf[2] = ':';
+    clkbuf[3] = (char) ('0' + gm_mi / 10);
+    clkbuf[4] = (char) ('0' + gm_mi % 10);
+    clkbuf[5] = '\0';
+
+    scr_right(0, clk_col, clkbuf, A_BAR);
+}
+
 static void flat_screen(void)
 {
+    clk_col = CLK_NONE;
     scr_clear();
     logo_large(SPLASH_LOGO_ROW,
                (unsigned char) ((scr_cols - LOGO_LARGE_COLS) / 2));
@@ -158,6 +193,7 @@ void ui_error(unsigned char code)
         break;
     case GM_NOTFOUND:
         l1 = "Message not found";
+        l2 = "refresh the inbox";
         break;
     case GM_REJECTED:
         l1 = "Draft rejected";
@@ -329,6 +365,9 @@ void ui_inbox(void)
         scr_text(0, 2, "Gmail  Inbox", A_BAR);
     }
 
+    clk_col = right_col;
+    ui_clock();
+
     page_indicator();
     scr_right(2, right_col, sbuf, A_TEXT);
 
@@ -381,7 +420,11 @@ void ui_message(unsigned int top)
     if (scr_wide) {
         date_fmt(datebuf, gm_index[gm_sel].ts);
         scr_right(0, right_col, datebuf, A_BAR);
+        clk_col = (unsigned char) (right_col - ENT_DATE_LEN - 1);
+    } else {
+        clk_col = right_col;
     }
+    ui_clock();
 
     nsub = wrap_text(gm_index[gm_sel].subject, wrapped[0], 2,
                      (unsigned char) (scr_cols - 2), sizeof(wrapped[0]));
@@ -444,11 +487,11 @@ void ui_message(unsigned int top)
 
 #define FRM_BODY_TOP    6
 #define FRM_RULE_ROW    5
-#define FRM_HINT_ROW    (FRM_BODY_TOP + FRM_NBODY + 1)
+#define FRM_HINT_ROW    (FRM_BODY_TOP + FRM_VBODY + 1)
 #define FRM_MSG_ROW     (FRM_HINT_ROW + 1)
 
 #if FRM_MSG_ROW >= FOOT_ROW
-#error "the form no longer fits above the footer -- lower FRM_NBODY"
+#error "the form no longer fits above the footer -- lower FRM_VBODY"
 #endif
 
 static unsigned char frm_valcol(void)
@@ -499,6 +542,9 @@ void ui_form(unsigned char mode)
         scr_text(0, 2, "Gmail  ", A_BAR);
         scr_text(0, 9, title, A_BAR);
     }
+
+    clk_col = right_col;
+    ui_clock();
 
     scr_text(3, 2, "To", A_TEXT);
     scr_text(4, 2, scr_wide ? "Subject" : "Sub", A_TEXT);

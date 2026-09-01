@@ -261,11 +261,12 @@ struct sk_set {
 void sk_bind(const struct sk_set *s);           /* legend + map, together */
 
 /*
- * The frame wait the key poll spins in. HALT rather than a counter: the VDP
- * raises an NMI once per frame and z88dk's coleco crt installs a handler for
- * it unconditionally (TAR__crt_enable_nmi), so a HALT wakes once per frame
- * with no interrupt of our own and nothing to read twice.
+ * The frame wait the key poll spins in lives in timer.c now, with the counter
+ * the wall clock runs on -- plat_vsync(), plat_ticks() and plat_fps() are all
+ * declared in gmail.h, because every backend owes them. It is still a HALT
+ * rather than a counter read: the VDP raises an NMI once per frame and z88dk's
+ * coleco crt installs a handler for it unconditionally (TAR__crt_enable_nmi),
+ * so a HALT wakes once per frame with no interrupt of our own.
  */
-void plat_vsync(void);
 
 #endif /* ADAM_PLATFORM_H */

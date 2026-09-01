@@ -5,7 +5,9 @@
  * Pure -- no platform, no network. compose.c owns the screen loop and the
  * cursor; net.c owns the channel; this file owns what is *in* the form and
  * what goes out on the wire, which is the half a host test can pin down to
- * the byte.
+ * the byte. The wrap rule lives here for the same reason: it is a statement
+ * about the text, not about the screen, and it is worth a test rather than a
+ * screenshot.
  *
  * Three modes share the one form. A compose sends TO, SUBJECT and the body.
  * A reply may leave TO and SUBJECT blank -- the adapter prefills the
@@ -135,6 +137,96 @@ unsigned char form_validate(unsigned char *bad)
     }
 
     return FM_NONE;
+}
+
+/* ------------------------------------------------------------------ */
+/* Wrap                                                                */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A body line that has filled pushes its trailing word down onto the line
+ * below, taking the cursor with it when the cursor was in that word. That is
+ * the whole of automatic wrapping here, and deliberately only half of a
+ * reflow: nothing ever comes back up. Enter in this form is a hard line break
+ * the user typed, so there is no paragraph for a reflow to be about, and a
+ * delete that pulled the next line's first word up would rewrite text the
+ * user never touched.
+ *
+ * For the same reason the spill is one line deep. When the line below is too
+ * full to take the word the keystroke is refused, exactly as it was before
+ * there was any wrapping at all -- cascading further would be reflowing a
+ * paragraph this form does not believe in.
+ *
+ * *line and *pos are the caller's cursor, moved when the cursor was inside
+ * the text that moved. Returns 1 when room was made on line *line.
+ */
+unsigned char form_body_spill(unsigned char *line, unsigned char *pos)
+{
+    unsigned char ln = *line;
+    char         *src;
+    char         *dst;
+    unsigned char len, cut, tail, dlen, sep;
+
+    if ((unsigned char) (ln + 1) >= FRM_NBODY)
+        return 0;                   /* the last line has nowhere to spill */
+
+    src = frm.body[ln];
+    dst = frm.body[ln + 1];
+
+    len = (unsigned char) strlen(src);
+    if (len == 0)
+        return 0;
+
+    /* Count back to the last space. `cut` is what leaves this line and `tail`
+       is how much of it arrives on the next; they differ by the space itself,
+       which is the break and goes nowhere. */
+    cut = 0;
+    while (cut < len && src[len - cut - 1] != ' ')
+        cut++;
+
+    if (cut == len) {
+        /* One word longer than a whole line. wrap.c hard-splits those and so
+           does this, a character at a time -- which is what typing a long URL
+           into a narrow screen looks like from the other side of it. No
+           separator: the word is continuing, not starting. */
+        cut = 1;
+        tail = 1;
+        sep = 0;
+    } else {
+        /* tail can be 0 here, when the line ends in the break space itself.
+           Dropping that space is the room; the cursor moves below it. */
+        tail = cut;
+        cut++;                      /* the break space leaves too */
+        sep = (unsigned char) ((tail && dst[0]) ? 1 : 0);
+    }
+
+    dlen = (unsigned char) strlen(dst);
+    if ((unsigned int) dlen + sep + tail > FRM_BODY_COLS)
+        return 0;
+
+    if (tail) {
+        memmove(dst + tail + sep, dst, (unsigned char) (dlen + 1));
+        memcpy(dst, src + len - tail, tail);
+        if (sep)
+            dst[tail] = ' ';
+    }
+
+    src[len - cut] = '\0';
+
+    /*
+     * The cursor follows the text it was in. Everything from index len - tail
+     * onward went to the head of the next line, so the offset within the tail
+     * is preserved exactly -- and a tail of nothing is not a special case: a
+     * line that ended in a space keeps its cursor moving to column 0 below,
+     * which is what makes the next character start the new line rather than
+     * being welded onto the last word of the old one.
+     */
+    if (*pos >= (unsigned char) (len - tail)) {
+        *line = (unsigned char) (ln + 1);
+        *pos = (unsigned char) (*pos - (len - tail));
+    }
+
+    return 1;
 }
 
 /* ------------------------------------------------------------------ */

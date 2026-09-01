@@ -175,14 +175,15 @@ void logo_large(unsigned char row, unsigned char col);
 /* ------------------------------------------------------------------ */
 
 /*
- * The frame wait the key poll spins in.
+ * The frame wait the key poll spins in lives in timer.c now, with the counter
+ * the wall clock runs on; plat_vsync(), plat_ticks() and plat_fps() are all
+ * declared in gmail.h, because every backend owes them.
  *
- * Nothing here needs the timing -- this client has no wall clock and no alarms
- * -- but tools/coco-shot.sh needs an address range the program provably comes
- * to rest inside, and a tight self-contained spin is the only kind that a
- * sampled PC lands in reliably. Polling inkey() alone would leave the CPU in
- * the BASIC ROM's keyboard scan most of the time, where no symbol names it.
+ * It is still the address range tools/coco-shot.sh aims at: it needs somewhere
+ * the program provably comes to rest, and a tight self-contained spin is the
+ * only kind a sampled PC lands in reliably. Polling inkey() alone would leave
+ * the CPU in the BASIC ROM's keyboard scan most of the time, where no symbol
+ * names it.
  */
-void plat_vsync(void);
 
 #endif /* COCO_PLATFORM_H */

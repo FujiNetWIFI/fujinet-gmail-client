@@ -61,14 +61,47 @@ static char detbuf[ENT_NAME_LEN + ENT_SUBJ_LEN + 4];
 static char wrapped[2][SCR_COLS + 1];
 static char datebuf[ENT_DATE_LEN];
 
+/*
+ * Where the wall clock goes on the screen that is up, or CLK_NONE.
+ *
+ * Thirty-two columns is the reason this is a variable and not a constant. The
+ * inbox has the gap between GMAIL and INBOX on its title row and the form has
+ * the whole right-hand end of its own; the reader has neither, because row 0
+ * there is nineteen columns of sender against twelve of date with one space
+ * between them, and the honest answer on this screen is that the clock does
+ * not fit rather than that the sender's name should lose six characters to it.
+ * The reader is also the screen with the message's own date already on it.
+ */
+#define CLK_NONE    0xFF
+static unsigned char clk_col = CLK_NONE;
+static char          clkbuf[6];
+
 /* ------------------------------------------------------------------ */
 /* Flat screens                                                        */
 /* ------------------------------------------------------------------ */
 
 static void flat_screen(void)
 {
+    clk_col = CLK_NONE;
     scr_clear();
     logo_large(FLAT_LOGO_ROW, FLAT_LOGO_COL);
+}
+
+/* HH:MM, right-aligned at clk_col on the title row. Hand-rolled rather than
+   utoa'd because a leading zero is not optional in a clock. */
+void ui_clock(void)
+{
+    if (clk_col == CLK_NONE || !gm_clock_ok)
+        return;
+
+    clkbuf[0] = (char) ('0' + gm_h / 10);
+    clkbuf[1] = (char) ('0' + gm_h % 10);
+    clkbuf[2] = ':';
+    clkbuf[3] = (char) ('0' + gm_mi / 10);
+    clkbuf[4] = (char) ('0' + gm_mi % 10);
+    clkbuf[5] = '\0';
+
+    scr_right(0, clk_col, clkbuf, 0);
 }
 
 void ui_splash(void)
@@ -123,6 +156,7 @@ void ui_error(unsigned char code)
         break;
     case GM_NOTFOUND:
         l1 = "MESSAGE NOT FOUND";
+        l2 = "REFRESH THE INBOX";
         break;
     case GM_REJECTED:
         l1 = "DRAFT REJECTED";
@@ -287,6 +321,10 @@ void ui_inbox(void)
     scr_text(0, HDR_TEXT_COL, "GMAIL", 0);
     scr_right(0, RIGHT_COL, "INBOX", 0);
 
+    /* Between GMAIL (cols 8-12) and INBOX (cols 27-31). */
+    clk_col = (unsigned char) (RIGHT_COL - 7);
+    ui_clock();
+
     draw_date();
     page_indicator();
     scr_right(1, RIGHT_COL, sbuf, 0);
@@ -333,6 +371,8 @@ void ui_message(unsigned int top)
     unsigned int  row;
     unsigned int  nsub;
     unsigned char i;
+
+    clk_col = CLK_NONE;         /* no slot on this screen -- see clk_col */
 
     scr_field(0, 0, gm_index[gm_sel].name, MSG_NAME_W, 0);
     scr_field(0, (unsigned char) (MSG_NAME_W), "", 1, 0);
@@ -398,13 +438,13 @@ void ui_message(unsigned int top)
  */
 
 #define FRM_BODY_TOP    4
-#define FRM_HINT_ROW    (FRM_BODY_TOP + FRM_NBODY + 1)
+#define FRM_HINT_ROW    (FRM_BODY_TOP + FRM_VBODY + 1)
 #define FRM_MSG_ROW     (FRM_HINT_ROW + 1)
 #define FRM_HDR_COL     3       /* TO/SU value column */
 #define FRM_HDR_W       29      /* their window: cols 3..31 */
 
 #if FRM_MSG_ROW >= FOOT_ROW
-#error "the form no longer fits above the footer -- lower FRM_NBODY"
+#error "the form no longer fits above the footer -- lower FRM_VBODY"
 #endif
 
 static unsigned char frm_row(unsigned char f)
@@ -433,6 +473,9 @@ void ui_form(unsigned char mode)
     scr_text(0, 0, (mode == FRM_REPLY) ? "REPLY"
                  : (mode == FRM_FWD)   ? "FORWARD"
                                        : "NEW MESSAGE", 0);
+
+    clk_col = RIGHT_COL;
+    ui_clock();
 
     scr_text(1, 0, "TO", 0);
     scr_text(2, 0, "SU", 0);

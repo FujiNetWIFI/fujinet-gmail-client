@@ -26,9 +26,6 @@
 #define KEY_BREAK   0x03
 #define KEY_CLEAR   0x0C
 
-/* Color BASIC's 60 Hz frame counter. */
-#define TIMER       (*(unsigned int *) 0x0112)
-
 #ifdef GM_FAKE_KEYS
 /*
  * Scripted input for headless testing. Build with, for example,
@@ -66,25 +63,6 @@ static unsigned char map(unsigned char c)
 }
 
 /*
- * One frame.
- *
- * CMOC accepts `volatile` and then ignores it, so this reads TIMER through the
- * macro on every pass rather than hoisting it into a register. The compiler
- * does no cross-statement elimination of pointer loads, which is what makes
- * that safe -- but it is the reason the loop is written this way and not with
- * a cached copy.
- *
- * See platform.h for why the wait exists at all in a program with no clock.
- */
-void plat_vsync(void)
-{
-    unsigned int t = TIMER;
-
-    while (TIMER == t)
-        ;
-}
-
-/*
  * The blocking wait, kept in a function of its own on purpose.
  *
  * It polls inkey() around plat_vsync() rather than calling CMOC's waitkey(),
@@ -104,6 +82,7 @@ static unsigned char key_block(void)
         if (c)
             return c;
         plat_vsync();
+        clock_pump();
     }
 }
 

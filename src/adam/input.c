@@ -20,7 +20,6 @@
  */
 
 #include <eos.h>
-#include <intrinsic.h>
 #include <smartkeys.h>
 
 #include "../gmail.h"
@@ -128,28 +127,6 @@ static unsigned char raw(void)
     return c;
 }
 
-/*
- * One frame.
- *
- * A HALT rather than a counter: the VDP raises an NMI once per frame and
- * z88dk's coleco crt installs a handler for it unconditionally, so HALT wakes
- * once per frame with no interrupt of our own to install and no multi-byte
- * counter to read twice. It also keeps the key poll off the AdamNet bus for
- * sixteen milliseconds at a time, which a bare spin on eos_end_read_keyboard()
- * would not.
- *
- * That it wakes at all is worth having checked rather than reasoned about, and
- * it has been: counting the wakes into a global and reading it out of two
- * ADAMEm snapshots twenty seconds apart gave 1204 frames, which is 60.2 Hz --
- * the NTSC rate, so every HALT is being ended by the VDP and none of them by
- * anything else. The calendar client reaches the same place via
- * add_raster_int(), and needs to only because its HAL exposes a tick count.
- */
-void plat_vsync(void)
-{
-    intrinsic_halt();
-}
-
 /* ------------------------------------------------------------------ */
 /* The plat_ contract                                                  */
 /* ------------------------------------------------------------------ */
@@ -171,6 +148,7 @@ unsigned char plat_getkey(void)
                 return k;
         }
         plat_vsync();
+        clock_pump();
     }
 }
 
@@ -188,8 +166,10 @@ void plat_anykey(void)
     }
 #endif
 
-    while (!raw())
+    while (!raw()) {
         plat_vsync();
+        clock_pump();
+    }
 }
 
 /*
@@ -233,5 +213,6 @@ unsigned char plat_getch(void)
             }
         }
         plat_vsync();
+        clock_pump();
     }
 }

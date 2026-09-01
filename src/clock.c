@@ -1,12 +1,14 @@
 /*
- * Everything date.c needs from the device, read once at boot.
+ * Everything date.c needs from the device, and the wall clock's starting point.
  *
- * Two values: the local UTC offset, and the current year. Neither changes often
- * enough to be worth a second device call, and both are cosmetic -- a mailbox
- * with no clock still browses perfectly, it just labels everything in UTC and
- * gives every message a time rather than a year. That is why this never fails
- * the boot the way the calendar client's clock does; there, every device spec
- * names a date and there is no sensible fallback for "today".
+ * Three things come out of one read: the local UTC offset, the current year,
+ * and the time of day. The first two are what date.c wants and neither changes
+ * often; the third is what src/tick.c advances between reads, and it is the
+ * only reason this is called more than once. All of it is cosmetic -- a mailbox
+ * with no clock still browses perfectly, it just labels everything in UTC,
+ * gives every message a time rather than a year, and shows no clock. That is
+ * why this never fails the boot the way the calendar client's clock does;
+ * there, every device spec names a date and there is no fallback for "today".
  *
  * The offset comes from TZ_ISO_STRING, which hands back
  *
@@ -80,6 +82,7 @@ void clock_load(void)
 
     gm_tzoff = 0;
     gm_year = 0;
+    gm_clock_ok = 0;
 
     for (i = 0; i < sizeof(iso); i++)
         iso[i] = 0;
@@ -116,4 +119,25 @@ void clock_load(void)
         gm_tzoff = (iso[19] == '-') ? -(int) off : (int) off;
 
     gm_year = y;
+
+    /*
+     * The time of day is in the same string, already resolved to local, so the
+     * wall clock costs no second device call -- it is the four digits this
+     * function was throwing away. well_formed() has already proved these are
+     * digits; the range check is against a clock that answers but answers
+     * nonsense.
+     */
+    {
+        unsigned int h = num2(iso + 11);
+        unsigned int m = num2(iso + 14);
+        unsigned int sec = num2(iso + 17);
+
+        if (h < 24 && m < 60 && sec < 60) {
+            gm_h = (unsigned char) h;
+            gm_mi = (unsigned char) m;
+            gm_s = (unsigned char) sec;
+            gm_clock_ok = 1;
+            tick_reset();
+        }
+    }
 }

@@ -67,41 +67,50 @@ static unsigned char map(unsigned char c)
 }
 
 /*
- * Blocking, and blocking is all this client ever needs.
+ * The wait every blocking read is built on.
  *
- * The calendar backend spins through plat_vsync() here because it keeps its own
- * frame counter and a wall clock that has to advance while a screen waits.
- * A mailbox has neither: the date column is resolved once at boot and nothing
- * on screen changes until a key arrives.
+ * This machine has no free-running counter of its own, so the wall clock runs
+ * on frames counted in plat_vsync() -- which means the wait has to be a poll
+ * around it rather than a spin on the keyboard alone. The cost is one
+ * vertical-retrace wait per pass; the gain is a clock that is still right when
+ * the user comes back to the screen.
  */
-unsigned char plat_getkey(void)
+static unsigned char key_wait(void)
 {
     unsigned char c;
 
+    for (;;) {
+        c = rawkey();
+        if (c)
+            return c;
+
+        plat_vsync();
+        clock_pump();
+    }
+}
+
+unsigned char plat_getkey(void)
+{
 #ifdef GM_FAKE_KEYS
     if (fake_idx < sizeof(fake_keys))
         return fake_keys[fake_idx++];
 #endif
 
-    for (;;) {
-        c = rawkey();
-        if (c)
-            return map(c);
-    }
+    return map(key_wait());
 }
 
 void plat_anykey(void)
 {
-    while (!rawkey())
-        ;
+    key_wait();
 }
 
 /*
  * The compose form's read. DELETE ($7F) erases; the left arrow ($08) moves
  * the cursor, which is what it does in every Apple editor -- erasing is
  * what it means in BASIC, but this machine has a DELETE key and BASIC does
- * not get a vote on a form. Busy-polls like plat_getkey(), and for the
- * same reason: nothing else here needs the frame to turn.
+ * not get a vote on a form. Polls through key_wait() like plat_getkey(), and
+ * for the same reason: this is the screen a user sits on longest, so it is the
+ * one whose clock going stale would be most obvious.
  */
 unsigned char plat_getch(void)
 {
@@ -115,19 +124,19 @@ unsigned char plat_getch(void)
 #endif
 
     for (;;) {
-        c = rawkey();
-        if (c) {
-            switch (c) {
-            case CH_CURS_UP:        return E_UP;
-            case CH_CURS_DOWN:      return E_DOWN;
-            case CH_CURS_LEFT:      return E_LEFT;
-            case CH_CURS_RIGHT:     return E_RIGHT;
-            case CH_ENTER:          return E_ENTER;
-            case CH_ESC:            return E_DONE;
-            case 0x7F:              return E_BS;
-            }
-            if (c >= 0x20 && c < 0x7F)
-                return c;
+        c = key_wait();
+
+        switch (c) {
+        case CH_CURS_UP:        return E_UP;
+        case CH_CURS_DOWN:      return E_DOWN;
+        case CH_CURS_LEFT:      return E_LEFT;
+        case CH_CURS_RIGHT:     return E_RIGHT;
+        case CH_ENTER:          return E_ENTER;
+        case CH_ESC:            return E_DONE;
+        case 0x7F:              return E_BS;
         }
+
+        if (c >= 0x20 && c < 0x7F)
+            return c;
     }
 }

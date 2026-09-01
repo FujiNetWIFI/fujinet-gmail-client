@@ -40,15 +40,48 @@ static char detbuf[ENT_NAME_LEN + ENT_SUBJ_LEN + 4];
 static char wrapped[2][SCR_COLS + 1];
 static char datebuf[ENT_DATE_LEN];
 
+/*
+ * Where the wall clock goes on the screen that is up, or CLK_NONE. It is not
+ * one row for all three banded screens: the inbox and the form have a spare
+ * right-hand end on the title row, and the reader does not -- its subject
+ * wraps across rows 1 and 2 -- so there the clock sits at the end of the From
+ * line, which gives up six of its forty columns for it.
+ *
+ * The flat screens clear it. They are the ones that are up while SIO is
+ * running, which is both the time there is nothing pumping the clock and the
+ * time we least want a repaint.
+ */
+#define CLK_NONE    0xFF
+static unsigned char clk_row = CLK_NONE;
+static char          clkbuf[6];
+
 /* ------------------------------------------------------------------ */
 /* Transient screens                                                   */
 /* ------------------------------------------------------------------ */
 
 static void flat_screen(void)
 {
+    clk_row = CLK_NONE;
     dli_flat(C_FLAT_BG, C_FLAT_FG);
     scr_clear();
     pmg_show(LOGO_LARGE, SPLASH_LOGO_ROW, SPLASH_LOGO_COL);
+}
+
+/* HH:MM, right-aligned in whatever slot the current screen has. Hand-rolled
+   rather than utoa'd because a leading zero is not optional in a clock. */
+void ui_clock(void)
+{
+    if (clk_row == CLK_NONE || !gm_clock_ok)
+        return;
+
+    clkbuf[0] = (char) ('0' + gm_h / 10);
+    clkbuf[1] = (char) ('0' + gm_h % 10);
+    clkbuf[2] = ':';
+    clkbuf[3] = (char) ('0' + gm_mi / 10);
+    clkbuf[4] = (char) ('0' + gm_mi % 10);
+    clkbuf[5] = '\0';
+
+    scr_right(clk_row, SCR_COLS - 2, clkbuf, 0);
 }
 
 void ui_splash(void)
@@ -102,6 +135,7 @@ void ui_error(unsigned char code)
         break;
     case GM_NOTFOUND:
         l1 = "Message not found";
+        l2 = "refresh the inbox";
         break;
     case GM_REJECTED:
         l1 = "Draft rejected";
@@ -249,6 +283,9 @@ void ui_inbox(void)
 
     draw_detail();
     scr_text(FOOT_ROW, 1, "RET:READ <>:PAGE C:NEW R:REFR ESC:QUIT", 0);
+
+    clk_row = 1;
+    ui_clock();
 }
 
 /* Repaint only what a selection move touched. gm_sel is already the new one. */
@@ -276,9 +313,11 @@ void ui_message(unsigned int top)
     dli_bands();
     pmg_hide();
 
+    /* Six columns short of the width: the clock lives at the end of this row,
+       because the subject below it needs both of the others. */
     strcpy(sbuf, "From: ");
     strcat(sbuf, gm_index[gm_sel].name);
-    scr_field(0, 0, sbuf, SCR_COLS, 0);
+    scr_field(0, 0, sbuf, SCR_COLS - 6, 0);
 
     nsub = wrap_text(gm_index[gm_sel].subject, wrapped[0], 2,
                      SCR_COLS, SCR_COLS + 1);
@@ -320,6 +359,9 @@ void ui_message(unsigned int top)
     if (gm_body_trunc)
         strcat(sbuf, "+");
     scr_right(FOOT_ROW, 38, sbuf, 0);
+
+    clk_row = 0;
+    ui_clock();
 }
 
 /* ------------------------------------------------------------------ */
@@ -336,12 +378,12 @@ void ui_message(unsigned int top)
  */
 
 #define FRM_BODY_TOP    6
-#define FRM_HINT_ROW    (FRM_BODY_TOP + FRM_NBODY + 1)
+#define FRM_HINT_ROW    (FRM_BODY_TOP + FRM_VBODY + 1)
 #define FRM_MSG_ROW     (FRM_HINT_ROW + 2)
 #define FRM_HDR_COL     6       /* TO/SUBJECT value column */
 
 #if FRM_MSG_ROW > 22
-#error "the form no longer fits above the footer band -- lower FRM_NBODY"
+#error "the form no longer fits above the footer band -- lower FRM_VBODY"
 #endif
 
 static unsigned char frm_row(unsigned char f)
@@ -383,6 +425,9 @@ void ui_form(unsigned char mode)
         scr_text(FRM_HINT_ROW, 1, "Blank To/Subj = reply defaults", 0);
 
     scr_text(FOOT_ROW, 1, "RET:NEXT  ^v:FIELD  ESC:DONE", 0);
+
+    clk_row = 1;
+    ui_clock();
 }
 
 void ui_form_row(unsigned char f, const char *win, unsigned char curx,
