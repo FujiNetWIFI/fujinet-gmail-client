@@ -145,9 +145,11 @@ CFLAGS_EXTRA_APPLE2ENH += -DFRM_NBODY=42 -DFRM_VBODY=14 -DFRM_BODY_COLS=76
 LDFLAGS_EXTRA_APPLE2ENH  = -Wl -D,__HIMEM__=0xBF00
 LDFLAGS_EXTRA_APPLE2ENH += --mapfile r2r/apple2enh/gmail.map
 
-# The CoCo runs at 32x16 on the VDG's semigraphics page -- the narrowest and
-# shortest screen this client has ever had, and the only one that can draw the
-# Gmail mark as the mark rather than as sprites or as holes in an inverse block.
+# The CoCo 1/2 runs at 32x16 on the VDG's semigraphics page -- the narrowest and
+# shortest screen this client has, and one of the two that draw the Gmail mark
+# as the mark rather than as sprites or as holes in an inverse block. The CoCo 3
+# build is the other, at 80x24 on the GIME with the mark in attribute color; its
+# knobs are in the MAKE_COCO3 branch below.
 #
 # IDX_MAX is the one knob that is not a preference. No backend scrolls a window
 # inside a page: ui_inbox() paints gm_count rows and that is the list. Sixteen
@@ -190,10 +192,36 @@ LDFLAGS_EXTRA_APPLE2ENH += --mapfile r2r/apple2enh/gmail.map
 # broken at a space and carried into the next row -- which shows up as one short
 # row in the middle of a paragraph. Six and a quarter rows of slack at 32
 # columns is the same 200 bytes the Atari spends for five.
+#
+# The CoCo 3 is a second binary rather than a runtime branch inside this one.
+# The two machines never share a screen: a 1/2 is always the VDG's 32x16 and a
+# 3 is always the GIME's 80x24, so a combined image would carry two backends,
+# two marks and two layouts through a $7C00 ceiling that has 2K left -- and the
+# 1/2, which is the machine with nothing to spare, would pay for all of it.
+# Split, each build carries only its own half and keeps compile-time geometry.
+#
+# The knobs below are the 80-column shape. Nineteen list rows and twenty reader
+# rows are what 24 rows leave after the two-row header, the two-row panel and
+# the footer. BODY_ROWS is lower than the 1/2's 142 because the stride is 81
+# rather than 33; in characters the two are within 3% of each other, which is
+# the trade the wider screen makes rather than a reduction.
+#
+ifeq ($(MAKE_COCO3),COCO3)
+
+CFLAGS_EXTRA_COCO  = -DCOCO3
+CFLAGS_EXTRA_COCO += -DIDX_MAX=19 -DMSG_ROWS=20
+CFLAGS_EXTRA_COCO += -DBODY_COLS=78 -DBODY_ROWS=50
+CFLAGS_EXTRA_COCO += -DFRM_NBODY=12 -DFRM_VBODY=10 -DFRM_BODY_COLS=80
+CFLAGS_EXTRA_COCO += -DENT_SUBJ_LEN=40 -DGM_RXBUF=256
+
+else
+
 CFLAGS_EXTRA_COCO  = -DIDX_MAX=11 -DMSG_ROWS=12
 CFLAGS_EXTRA_COCO += -DBODY_COLS=32 -DBODY_ROWS=142
 CFLAGS_EXTRA_COCO += -DFRM_NBODY=24 -DFRM_VBODY=6 -DFRM_BODY_COLS=32
 CFLAGS_EXTRA_COCO += -DENT_SUBJ_LEN=48 -DGM_RXBUF=256
+
+endif
 
 CFLAGS_EXTRA_COCO += -fomit-frame-pointer
 
@@ -228,23 +256,34 @@ CFLAGS_EXTRA_COCO += $(COCO_SHOT_FLAGS)
 # --limit is what turns "silently corrupts the stack" into a build failure, so
 # it goes in from the first link rather than after the first mystery. -i keeps
 # the .map, which tools/coco-shot.sh reads its breakpoint symbol out of.
+#
+# The CoCo 3 build gets the ceiling fujinet-fujirkle uses on the same machine.
+# Its text page is banked in through the $C000 window rather than living in the
+# 64K map, so nothing has to be kept clear below it, and the stack sits at the
+# top of RAM under the $8000 ROM.
+#
+ifeq ($(MAKE_COCO3),COCO3)
+LDFLAGS_EXTRA_COCO  = --org=1000 --limit=7E00 --initial-s=8000
+else
 LDFLAGS_EXTRA_COCO  = --org=1000 --limit=7C00 --initial-s=7F00
+endif
 LDFLAGS_EXTRA_COCO += --no-relocate -i
 
-# The disk carries GMAIL.BIN and nothing else. It is started with
+# `make coco` puts GMAIL.BIN on a disk by itself, started by hand with
 #
 #   LOADM"GMAIL":EXEC
 #
-# and there is deliberately no AUTOEXEC.BAS to do that for you, because neither
-# way of putting one on the disk survives contact:
+# `make coco-dist` builds the combined CoCo 1/2 + CoCo 3 disk instead, which
+# carries an AUTOEXEC.BAS, the loader as GMAIL.BIN, and the two clients as
+# GMAIL1.BIN and GMAIL3.BIN. See the recipe at the foot of this file.
 #
-#   - decb's -t runs its own BASIC tokeniser, and it does not know LOADM. It
-#     matches LOAD greedily and leaves the M as text, so the line comes back as
-#     LOAD M"GMAIL" and RUN answers ?SN ERROR.
-#   - Stored as ASCII with -a -l, BASIC tokenises it correctly on the way in --
-#     and then ?SN ERRORs anyway, because Disk BASIC runs an ASCII program out
-#     of the disk buffer that LOADM itself needs. Disk I/O from an ASCII-loaded
-#     program does not work.
+# That AUTOEXEC is RUNM"GMAIL" -- an HDB-DOS command -- and it has to be RUNM
+# rather than LOADM. decb's -t tokenizer does not know LOADM: it matches LOAD
+# greedily and leaves the M as text, so the line comes back as LOAD M"GMAIL"
+# and RUN answers ?SN ERROR. Storing it as ASCII with -a -l does not help
+# either -- BASIC tokenizes that correctly on the way in and then ?SN ERRORs
+# anyway, because Disk BASIC runs an ASCII program out of the disk buffer that
+# LOADM itself needs. Disk I/O from an ASCII-loaded program does not work.
 
 # The PC is the one machine that does not know its own width until it boots:
 # the same GMAIL.EXE runs at 40x25 (modes 0/1), 80x25 (modes 2/3) and on an
@@ -325,6 +364,52 @@ include mekkogx/toplevel-rules.mk
 #   coco/r2r:: coco/custom-step2
 # or
 #   apple2/disk: apple2/custom-step1 apple2/custom-step2
+
+#################################################################
+## COCO 1/2 + COCO 3 COMBINED DISK                             ##
+#################################################################
+
+COCO_R2R  = r2r/coco/$(PRODUCT)
+COCO_DISK = $(COCO_R2R).dsk
+
+# The CoCo 3 variant, through the same rules as the 1/2.
+coco3:
+	$(MAKE) coco MAKE_COCO3=COCO3
+
+#
+# One disk that runs on either machine: GMAIL1.BIN for the VDG, GMAIL3.BIN for
+# the GIME, and GMAIL.BIN a loader that reads the model and RUNMs the right one
+# -- fujinet-fujirkle's pattern, and support/coco/loader.c is its loader.
+#
+# AUTOEXEC.BAS is RUNM"GMAIL", which starts the loader, which picks the binary.
+# The note further up about decb mangling LOADM is about LOADM: RUNM is what
+# fujinet-fujirkle puts on its combined disk and it is what works here.
+#
+# The object tree has to go between the two builds. Make keys off timestamps
+# rather than flags, so without this the second variant would silently relink
+# the first one's objects.
+#
+coco-dist:
+	$(MAKE) clean
+	rm -rf build
+	$(MAKE) coco
+	mv $(COCO_R2R).bin $(COCO_R2R)1.bin
+
+	rm -rf build
+	$(MAKE) coco3
+	mv $(COCO_R2R).bin $(COCO_R2R)3.bin
+
+	cmoc -o $(COCO_R2R).bin support/coco/loader.c
+
+	$(RM) $(COCO_DISK)
+	decb dskini $(COCO_DISK)
+	mkdir -p build/coco
+	echo RUNM\"GMAIL\" > build/coco/autoexec.bas
+	decb copy -t -0 build/coco/autoexec.bas $(COCO_DISK),AUTOEXEC.BAS
+	decb copy -b -2 $(COCO_R2R).bin  $(COCO_DISK),GMAIL.BIN
+	decb copy -b -2 $(COCO_R2R)1.bin $(COCO_DISK),GMAIL1.BIN
+	decb copy -b -2 $(COCO_R2R)3.bin $(COCO_DISK),GMAIL3.BIN
+	decb dir $(COCO_DISK)
 
 # The MS-DOS image is a driver disk: GMAIL.EXE plus the pieces of
 # fujinet-msdos a running FujiNet setup needs -- FUJINET.SYS and FUJIPRN.SYS

@@ -4,18 +4,22 @@
  * Three screens: the inbox, the message reader, and the flat ones -- splash,
  * busy, error -- that share a layout and differ only in their text.
  *
- * Thirty-two columns by sixteen rows is the smallest screen this client has
- * had, two-thirds of the Atari's rows and four-tenths of the Apple's cells, and
- * every row here is spoken for. The header is two rows because the mark is two
- * rows. The panel under the list is two rows because a 12-column From and a
- * 17-column Subject truncate hard enough that the selected entry has to be
- * spelled out somewhere. What is left -- eleven rows -- is the page size, which
- * is why IDX_MAX comes down to 11 on this platform rather than the list
- * scrolling inside a page.
+ * One layout serves both CoCo builds; the geometry it is written against comes
+ * from platform.h, so the bands fall out of SCR_COLS and SCR_ROWS rather than
+ * being spelled twice. Only the column widths differ enough to need an #ifdef.
  *
- * Every string literal is uppercase: the 6847 has sixty-four glyphs and no
- * lowercase, so sc() would fold them anyway and writing them folded is the only
- * way the source says what the screen shows.
+ * On the 1/2, thirty-two by sixteen is the smallest screen this client has and
+ * every row is spoken for. The header is two rows because the mark is two rows.
+ * The panel under the list is two rows because a 12-column From and a 17-column
+ * Subject truncate hard enough that the selected entry has to be spelled out
+ * somewhere. What is left is the page size, which is why IDX_MAX is 11 there
+ * rather than the list scrolling inside a page -- and 19 on the CoCo 3, where
+ * the same arithmetic runs against 24 rows.
+ *
+ * Every string literal is uppercase because the 6847 has sixty-four glyphs and
+ * no lowercase, so sc() would fold them anyway and writing them folded is the
+ * only way the source says what the screen shows. The GIME build has a full
+ * character set and does not need this, but shares the literals.
  */
 
 #include <stdlib.h>
@@ -32,9 +36,19 @@
    selection bar -- see the rule in platform.h. */
 #define COL_CHIP        0
 #define COL_FROM        2
+
+#ifdef COCO3
+/* Eighty columns pay for a From that holds most real display names and a
+   Subject that rarely truncates -- the two fields the 32-column build has to
+   cut to twelve and seventeen and then spell out again in the panel. */
+#define W_FROM          24
+#define COL_SUBJ        28
+#else
 #define W_FROM          12
 #define COL_SUBJ        15
-#define W_SUBJ          (SCR_COLS - COL_SUBJ)   /* 17 */
+#endif
+
+#define W_SUBJ          (SCR_COLS - COL_SUBJ)
 
 /* Header row 1: the selected message's date on the left, the page indicator
    flush right, and one blank column between them that neither may cross. */
@@ -43,9 +57,10 @@
 #define PAGE_COL        (DATE_COL + W_DATE + 1) /* 21            */
 #define W_PAGE          (SCR_COLS - PAGE_COL)   /* 11, cols 21-31 */
 
-/* Reader: sender and date on row 0, subject wrapped over rows 1-2. */
-#define MSG_NAME_W      19                      /* cols 0-18 */
-#define MSG_DATE_COL    (SCR_COLS - W_DATE)     /* cols 20-31 */
+/* Reader: sender and date on row 0, subject wrapped over rows 1-2. The name
+   runs to one column short of the date, wherever the date starts. */
+#define MSG_DATE_COL    (SCR_COLS - W_DATE)
+#define MSG_NAME_W      (MSG_DATE_COL - 1)
 
 /* Flat screens. logo_large() takes the top-left of the mark and draws its
    frame in the ring outside, so the frame lands on rows 2-8, cols 10-21. */
@@ -75,6 +90,19 @@ static char datebuf[ENT_DATE_LEN];
 #define CLK_NONE    0xFF
 static unsigned char clk_col = CLK_NONE;
 static char          clkbuf[6];
+
+/*
+ * The footer's own color, which only the GIME build has. Row 0 is not given
+ * the matching treatment because the mark lives in its first seven columns and
+ * a band would repaint them; three sides bounded is enough there, as it is on
+ * the VDG.
+ */
+static void foot_band(void)
+{
+#ifdef COCO3
+    scr_attr_run(FOOT_ROW, 0, SCR_COLS, A_FOOT);
+#endif
+}
 
 /* ------------------------------------------------------------------ */
 /* Flat screens                                                        */
@@ -282,6 +310,15 @@ static void draw_entry(unsigned char slot)
     scr_field(row, COL_FROM, e->name, W_FROM, inv);
     scr_field(row, (unsigned char) (COL_FROM + W_FROM), "", 1, inv);
     scr_field(row, COL_SUBJ, e->subject, W_SUBJ, inv);
+
+#ifdef COCO3
+    /* Unread rows read brighter, the way the web client bolds them. One red
+       cell in column 0 carries the whole distinction on a 32-column screen;
+       across eighty it needs the row itself to say so. The selected row keeps
+       the bar, which outranks it. */
+    if (e->unread && !inv)
+        scr_attr_run(row, 1, (unsigned char) (SCR_COLS - 1), A_EMPH);
+#endif
 }
 
 /*
@@ -338,6 +375,7 @@ void ui_inbox(void)
 
     draw_panel();
     scr_field(FOOT_ROW, 0, "ENT:RD C:NEW <>:PG R:REF Q:QUIT", SCR_COLS, 0);
+    foot_band();
 }
 
 /* Repaint only what a selection move touched. gm_sel is already the new one,
@@ -421,6 +459,7 @@ void ui_message(unsigned int top)
     if (gm_body_trunc)
         strcat(sbuf, "+");
     scr_right(FOOT_ROW, RIGHT_COL, sbuf, 0);
+    foot_band();
 }
 
 /* ------------------------------------------------------------------ */
@@ -428,20 +467,21 @@ void ui_message(unsigned int top)
 /* ------------------------------------------------------------------ */
 
 /*
- * Sixteen rows carry two header fields, six body lines, a hint and a
- * message row, so the spacing is tighter than anyone else's. The active
- * field is a full inverse bar -- the list's selection language -- with
- * the cursor cell knocked back to normal video. compose.c owns the cursor
- * and the horizontal scroll; the editor here is append-and-backspace (see
- * input.c) and the echo is the 6847's uppercase set, which is also
- * everything the wire will get from this keyboard.
+ * Two header fields, FRM_VBODY body lines, a hint and a message row. On the
+ * 1/2's sixteen rows that spacing is tighter than anyone else's; the CoCo 3
+ * spends its extra eight rows on the body window. The active field is a full
+ * inverse bar -- the list's selection language -- with the cursor cell knocked
+ * back to normal video. compose.c owns the cursor and the horizontal scroll;
+ * the editor here is append-and-backspace (see input.c) and the echo is the
+ * 6847's uppercase set, which is also everything the wire will get from this
+ * keyboard.
  */
 
 #define FRM_BODY_TOP    4
 #define FRM_HINT_ROW    (FRM_BODY_TOP + FRM_VBODY + 1)
 #define FRM_MSG_ROW     (FRM_HINT_ROW + 1)
 #define FRM_HDR_COL     3       /* TO/SU value column */
-#define FRM_HDR_W       29      /* their window: cols 3..31 */
+#define FRM_HDR_W       (SCR_COLS - FRM_HDR_COL)
 
 #if FRM_MSG_ROW >= FOOT_ROW
 #error "the form no longer fits above the footer -- lower FRM_VBODY"
@@ -484,6 +524,7 @@ void ui_form(unsigned char mode)
         scr_text(FRM_HINT_ROW, 0, "BLANK TO/SU = REPLY DEFAULTS", 0);
 
     scr_field(FOOT_ROW, 0, "ENT:NEXT LFT:DEL BRK:DONE", SCR_COLS, 0);
+    foot_band();
 }
 
 void ui_form_row(unsigned char f, const char *win, unsigned char curx,

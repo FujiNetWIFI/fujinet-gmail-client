@@ -1,14 +1,18 @@
 /*
- * The Gmail mark, in semigraphics.
+ * The Gmail mark.
  *
- * This is the only backend that draws the thing itself. The Atari spends four
- * players and a display list interrupt to get the four brand colours on
- * screen; the Apple, at one bit per pixel, can only make the envelope an
- * inverse block and leave the strokes as holes in it. Here the mark is a table
- * of bytes copied into screen RAM, and the strokes are the real colours on a
- * real white envelope.
+ * This backend draws the thing itself. The Atari spends four players and a
+ * display list interrupt to get the four brand colors on screen; the Apple, at
+ * one bit per pixel, can only make the envelope an inverse block and leave the
+ * strokes as holes in it. Here the mark is a table of color cells written
+ * through scr_cells(), and the strokes are the real colors on a real white
+ * envelope.
  *
- * Two constraints shape it, and both are the VDG's.
+ * Both builds share the tables. On the 1/2 an entry is an SG4 byte; on the
+ * CoCo 3 the same entry is an attribute worn by a space, one cell per color.
+ *
+ * Two constraints shape the tables, and both are the VDG's -- the CoCo 3
+ * inherits their shape rather than needing them.
  *
  * All four quadrants of a cell share one colour, so every boundary between two
  * brand colours falls on a cell edge: the strokes are a whole cell wide -- 8
@@ -31,8 +35,6 @@
  * is TL TR BL BR from bit 3 down, and getting it wrong produces something that
  * still looks deliberate.
  */
-
-#include <string.h>
 
 #include "../gmail.h"
 #include "platform.h"
@@ -94,8 +96,8 @@ void logo_small(unsigned char row, unsigned char col)
     unsigned char i;
 
     for (i = 0; i < LOGO_SMALL_ROWS; i++) {
-        memcpy(SCR_RAM + (unsigned int) (row + i) * SCR_COLS + col,
-               mark_small[i], LOGO_SMALL_COLS);
+        scr_cells((unsigned char) (row + i), col,
+                  mark_small[i], LOGO_SMALL_COLS);
         scr_cell((unsigned char) (row + i),
                  (unsigned char) (col + LOGO_SMALL_COLS), SG_BLACK);
     }
@@ -119,8 +121,8 @@ void logo_large(unsigned char row, unsigned char col)
 
     for (i = 0; i < LOGO_LARGE_ROWS; i++) {
         scr_cell((unsigned char) (row + i), left, SG_BLACK);
-        memcpy(SCR_RAM + (unsigned int) (row + i) * SCR_COLS + col,
-               mark_large[i], LOGO_LARGE_COLS);
+        scr_cells((unsigned char) (row + i), col,
+                  mark_large[i], LOGO_LARGE_COLS);
         scr_cell((unsigned char) (row + i),
                  (unsigned char) (col + LOGO_LARGE_COLS), SG_BLACK);
     }
