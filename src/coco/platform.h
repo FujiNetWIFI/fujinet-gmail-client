@@ -3,20 +3,25 @@
  * this directory. The portable half of the program talks to us only through
  * the plat_* / ui_* declarations in ../gmail.h.
  *
- * The screen is the 6847's 32x16 alpha/semigraphics page at $0400, and the
- * whole design turns on one property of it: the VDG decides per byte whether a
- * cell is a character or a 2x2 block of colour, with no mode switch and no
- * second display list.
+ * Two machines are built from this directory: the CoCo 1/2, described below,
+ * and the CoCo 3 under -DCOCO3, whose GIME text page has its own notes in the
+ * COCO3 block further down. Only one of the two compiles into any binary.
+ *
+ * The 1/2's screen is the 6847's 32x16 alpha/semigraphics page at $0400, and
+ * the whole design turns on one property of it: the VDG decides per byte
+ * whether a cell is a character or a 2x2 block of colour, with no mode switch
+ * and no second display list.
  *
  *   $00-$3F   glyph (byte & $3F), INV asserted -- green on dark green
  *   $40-$7F   the same glyph, normal video -- dark green on green
  *   $80-$FF   SG4: bit 7 set, bits 6-4 colour, bits 3-0 quadrant mask
  *
- * So text and colour intermix freely. This is the only backend that draws the
- * Gmail mark as the mark -- a white envelope with four coloured strokes -- as
- * ordinary bytes in screen RAM. The Atari needs four players and an interrupt
- * for the same thing; the Apple, with one bit per pixel, can only punch the
- * strokes out of an inverse block as holes.
+ * So text and colour intermix freely, which is how this backend draws the Gmail
+ * mark as the mark -- a white envelope with four coloured strokes -- as ordinary
+ * bytes in screen RAM. The Atari needs four players and an interrupt for the
+ * same thing; the Apple, with one bit per pixel, can only punch the strokes out
+ * of an inverse block as holes. The CoCo 3 build gets there a third way, one
+ * cell per colour off the attribute plane.
  *
  * Three things about that byte map bite, and all three are load-bearing here:
  *
@@ -45,6 +50,96 @@
 
 #include <coco.h>
 
+#ifdef COCO3
+
+/*
+ * CoCo 3: the GIME's 80x24 text page, which is a different machine from the
+ * VDG page above in every way that matters here.
+ *
+ * A cell is two bytes -- character then attribute -- and the character is
+ * plain ASCII, so sc()'s $3F fold has no counterpart on this build. The
+ * attribute is (fg << 3) | bg with bit 6 underline and bit 7 blink; fg indexes
+ * palette slots 8-15 and bg slots 0-7, which is why the two fields are
+ * separate constants below rather than one color each.
+ *
+ * The page is not in the CPU map. It lives in MMU block $36, which has to be
+ * banked into the $C000 window to be written and unbanked afterwards, with
+ * interrupts masked across the pair -- see screen.c. That is the whole reason
+ * this backend cannot simply keep pointing memcpy() at SCR_RAM.
+ *
+ * There are no semigraphics at all, so the mark is drawn as background color
+ * on space characters: one cell per color rather than the VDG's four
+ * quadrants. At 80x24 that is finer than the 6847 page manages, not coarser.
+ */
+
+#define SCR_COLS    80
+#define SCR_ROWS    24
+
+/* The $C000 window the text page is banked into, and the block that holds it. */
+#define SCR_WIN     ((unsigned char *) 0xC000)
+#define SCR_BLOCK   0x36
+
+/* Plain ASCII on this page. */
+#define SCR_BLANK   0x20
+
+/* ------------------------------------------------------------------ */
+/* Palette                                                             */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Background slots 0-7. The three chrome colors are the MS-DOS backend's --
+ * blue page, light selection bar, red footer -- because that is the one other
+ * backend with real attribute color and the client should read the same on
+ * both. The other four are Gmail's own, for the mark.
+ *
+ * PAL_PAPER doubles as the selection bar's background and the envelope, and
+ * PAL_RED as the footer bar and the mark's red stroke. Eight slots do not
+ * stretch to separate ones, and neither pair ever meets on screen.
+ */
+#define PAL_PAGE        0       /* page background, blue                */
+#define PAL_PAPER       1       /* selection bar and the envelope       */
+#define PAL_RED         2       /* footer bar and the mark's red        */
+#define PAL_BLUE        3       /* the mark's blue pillar               */
+#define PAL_YELLOW      4
+#define PAL_GREEN       5
+#define PAL_BLACK       6       /* frame, gutter, and the read chip     */
+#define PAL_EMPH        7       /* unread rows                          */
+
+/* Foreground indices. These are 0-7 in the attribute byte and land on palette
+   slots 8-15, which is why they are not the same numbers as the backgrounds. */
+#define FG_WHITE        0
+#define FG_BLACK        1
+#define FG_BRIGHT       2
+
+#define ATTR(f, b)      ((unsigned char) (((f) << 3) | (b)))
+#define ATTR_UNDER      0x40
+
+/* ------------------------------------------------------------------ */
+/* Attribute roles                                                     */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Painters name a role, not a color, exactly as the MS-DOS backend does. A
+ * color picker would only have to rewrite these six and repaint; nothing that
+ * draws needs to know a palette slot.
+ */
+#define A_TEXT      ATTR(FG_WHITE,  PAL_PAGE)
+#define A_EMPH      ATTR(FG_BRIGHT, PAL_PAGE)
+#define A_SEL       ATTR(FG_BLACK,  PAL_PAPER)
+#define A_BAR       ATTR(FG_BLACK,  PAL_PAPER)
+#define A_FOOT      ATTR(FG_BRIGHT, PAL_RED)
+#define A_UNDER     (ATTR(FG_BRIGHT, PAL_PAGE) | ATTR_UNDER)
+
+/* What the mark is made of: a space on a colored ground. */
+#define GM_BLUE     ATTR(FG_WHITE, PAL_BLUE)
+#define GM_RED      ATTR(FG_WHITE, PAL_RED)
+#define GM_YELLOW   ATTR(FG_WHITE, PAL_YELLOW)
+#define GM_GREEN    ATTR(FG_WHITE, PAL_GREEN)
+#define GM_PAPER    ATTR(FG_WHITE, PAL_PAPER)
+#define SG_BLACK    ATTR(FG_WHITE, PAL_BLACK)
+
+#else
+
 #define SCR_COLS    32
 #define SCR_ROWS    16
 #define SCR_RAM     ((unsigned char *) 0x0400)
@@ -52,9 +147,13 @@
 /* Space, normal video. Not zero -- see the header comment. */
 #define SCR_BLANK   0x60
 
+#endif /* COCO3 */
+
 /* ------------------------------------------------------------------ */
 /* Semigraphics-4                                                      */
 /* ------------------------------------------------------------------ */
+
+#ifndef COCO3
 
 #define SG_GREEN        0
 #define SG_YELLOW       1
@@ -90,6 +189,8 @@
 #define GM_YELLOW       SG_SOLID(SG_YELLOW)
 #define GM_GREEN        SG_SOLID(SG_GREEN)
 #define GM_PAPER        SG_SOLID(SG_BUFF)
+
+#endif /* !COCO3 */
 
 /* ------------------------------------------------------------------ */
 /* Band geometry                                                       */
@@ -143,6 +244,19 @@ void scr_center(unsigned char row, const char *s, unsigned char inv);
 void scr_cell(unsigned char row, unsigned char col, unsigned char v);
 void scr_fill(unsigned char row, unsigned char col, unsigned char v,
               unsigned char width);
+
+/* A run of color cells from a table -- one row of the mark. On the VDG this
+   is a memcpy of SG4 bytes; on the GIME each entry is an attribute worn by a
+   space, which is why logo.c goes through this rather than touching memory. */
+void scr_cells(unsigned char row, unsigned char col,
+               const unsigned char *v, unsigned char n);
+
+#ifdef COCO3
+/* Recolor a run of cells' attribute bytes, leaving their text alone: the
+   footer band, and the brighter foreground an unread row gets. */
+void scr_attr_run(unsigned char row, unsigned char col, unsigned char width,
+                  unsigned char attr);
+#endif
 
 /* ------------------------------------------------------------------ */
 /* logo.c -- the Gmail mark                                            */
