@@ -304,9 +304,15 @@ unsigned char gm_fetch_index(unsigned long range)
 
     plat_net_begin();
 
-    /* A 16-entry listing is ~19 sequential upstream HTTPS round trips inside
-       this one open, so widen the SIO timeout around it and put it straight
-       back afterwards. */
+#ifdef GM_PROGRESS_UI
+    /* The open below is where the real wait happens -- draw before it.
+       A couple of vsyncs first let the draw settle before the AdamNet
+       bus transaction starts, which on the Adam otherwise clobbers it. */
+    ui_auth_phase();
+    plat_vsync();
+    plat_vsync();
+#endif
+
     gm_stage = "open";
     fn_default_timeout = TMO_LONG;
     code = network_open(url, MB_MODE_DIR, MB_FMT_RAW);
@@ -328,12 +334,10 @@ unsigned char gm_fetch_index(unsigned long range)
     if (n > IDX_MAX)
         n = IDX_MAX;
 
-    left = st_bw;               /* bytes the device says it has staged */
-    have = 0;                   /* how many of them are sitting in stage[] */
+    left = st_bw;
+    have = 0;
 
     for (i = 0; i < n; i++) {
-        /* Refill until a whole record is in hand. This always fits: have is
-           below REC_STRIDE here and the buffer is IDX_READ + REC_STRIDE. */
         while (have < REC_STRIDE) {
             want = (left < (unsigned int) IDX_READ)
                  ? left : (unsigned int) IDX_READ;
@@ -347,20 +351,16 @@ unsigned char gm_fetch_index(unsigned long range)
             left -= want;
         }
         if (have < REC_STRIDE)
-            break;          /* short read: EOF or error, keep what we have */
+            break;
 
-        /* The listing is newest-first and msgNum is a 1-based position counted
-           from the oldest, so record 0 is the only place the folder size is
-           available. */
         if (i == 0)
             gm_total = rd32le(REC.msgnum) + range;
 
         parse_rec(i);
+#ifdef GM_PROGRESS_UI
+        ui_fetch_progress(i + 1, n);
+#endif
 
-        /* Carry whatever of the next record came in the same packet. Only a
-           packetised bus ever has a tail, so this is a no-op elsewhere -- and
-           it is a loop rather than memmove() because not every toolchain in
-           this family ships one. */
         have -= REC_STRIDE;
         for (j = 0; j < have; j++)
             stage[j] = stage[REC_STRIDE + j];

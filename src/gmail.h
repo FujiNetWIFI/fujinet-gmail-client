@@ -451,6 +451,10 @@ unsigned char plat_fps(void);
 void          ui_splash(void);
 void          ui_notfound(void);
 void          ui_busy(unsigned char reason);
+#ifdef GM_PROGRESS_UI
+void          ui_auth_phase(void);
+void          ui_fetch_progress(unsigned char current, unsigned char total);
+#endif
 void          ui_error(unsigned char code);
 void          ui_inbox(void);                   /* full repaint */
 void          ui_inbox_sel(unsigned char from, unsigned char to);

@@ -164,6 +164,53 @@ void ui_busy(unsigned char reason)
     }
 }
 
+#ifdef GM_PROGRESS_UI
+void ui_auth_phase(void)
+{
+    scr_row_clear(18);
+    scr_center(18, "Authorizing...", A_TEXT);
+}
+
+void ui_fetch_progress(unsigned char current, unsigned char total)
+{
+    unsigned char bar_width, fill_len, i, empty_len;
+    unsigned char bar_col;
+    unsigned long numerator;
+
+    if (total == 0)
+        return;
+
+    bar_width = 60;
+
+    scr_row_clear(18);
+    scr_row_clear(19);
+
+    strcpy(sbuf, "Loading ");
+    num(sbuf + 8, current);
+    strcat(sbuf, " of ");
+    num(sbuf + strlen(sbuf), total);
+    scr_center(18, sbuf, A_TEXT);
+
+    numerator = (unsigned long) current * bar_width;
+    fill_len = (unsigned char) (numerator / total);
+    if (fill_len > bar_width)
+        fill_len = bar_width;
+
+    bar_col = (unsigned char) ((scr_cols - (bar_width + 2)) / 2);
+
+    scr_text(19, bar_col, "[", A_TEXT);
+
+    if (fill_len > 0)
+        scr_fill(19, (unsigned char) (bar_col + 1), 0xDB, fill_len, A_EMPH);
+
+    empty_len = (unsigned char) (bar_width - fill_len);
+    if (empty_len > 0)
+        scr_fill(19, (unsigned char) (bar_col + 1 + fill_len), '-', empty_len, A_TEXT);
+
+    scr_text(19, (unsigned char) (bar_col + bar_width + 1), "]", A_TEXT);
+}
+#endif
+
 void ui_sent(void)
 {
     flat_screen();
