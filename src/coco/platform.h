@@ -50,6 +50,9 @@
 
 #include <coco.h>
 
+/* Graphics character code for filled block (6847 SG4 mode, pattern 15, color 1) */
+#define GLYPH_FILLED_BLOCK  143
+
 #ifdef COCO3
 
 /*

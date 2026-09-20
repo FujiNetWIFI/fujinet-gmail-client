@@ -161,6 +161,91 @@ void ui_busy(unsigned char reason)
     }
 }
 
+void ui_auth_phase(void)
+{
+#ifdef COCO3
+    scr_row_clear(FLAT_BODY + 3);
+    scr_center(FLAT_BODY + 3, "AUTHORIZING...", 0);
+#else
+    scr_row_clear(FLAT_BODY + 2);
+    scr_center(FLAT_BODY + 2, "AUTHORIZING...", 0);
+#endif
+}
+
+void ui_fetch_progress(unsigned char current, unsigned char total)
+{
+    unsigned char bar_width, fill_len, i, col;
+    unsigned char bar_col;
+    unsigned char msg_row, bar_row;
+    char text_line[50];
+    char bar_section[35];
+
+    if (total == 0)
+        return;
+
+#ifdef COCO3
+    bar_width = 32;
+    msg_row = FLAT_BODY + 3;
+    bar_row = FLAT_BODY + 4;
+#else
+    bar_width = 24;
+    msg_row = FLAT_BODY + 2;
+    bar_row = FLAT_BODY + 3;
+#endif
+
+    scr_row_clear(msg_row);
+    scr_row_clear(bar_row);
+
+    sprintf(text_line, "LOADING... %2d OF %2d", current, total);
+    scr_center(msg_row, text_line, 0);
+
+    /* Calculate fill length. */
+    fill_len = 0;
+    if (total > 0) {
+        unsigned long numerator = (unsigned long) current * bar_width;
+        fill_len = (unsigned char) (numerator / total);
+        if (fill_len > bar_width)
+            fill_len = bar_width;
+    }
+
+    /* Center the bar. Bar is bar_width + 2 chars (brackets). */
+    bar_col = (unsigned char) ((SCR_COLS - (bar_width + 2)) / 2);
+
+    /* Draw opening bracket. */
+    scr_text(bar_row, bar_col, "[", 0);
+
+    /* Draw filled portion.
+       CoCo3: use space with inverse video for visual block.
+       CoCo 1/2: use 0xFF (semigraphics filled block). */
+#ifdef COCO3
+    if (fill_len > 0) {
+        for (i = 0; i < fill_len; i++)
+            bar_section[i] = ' ';
+        bar_section[fill_len] = 0;
+        scr_field(bar_row, (unsigned char)(bar_col + 1), bar_section, fill_len, 1);
+    }
+#else
+    if (fill_len > 0) {
+        for (i = 0; i < fill_len; i++)
+            bar_section[i] = (char) GLYPH_FILLED_BLOCK;
+        bar_section[fill_len] = 0;
+        scr_text(bar_row, (unsigned char)(bar_col + 1), bar_section, 0);
+    }
+#endif
+
+    /* Draw unfilled portion with dashes. */
+    if (fill_len < bar_width) {
+        unsigned char empty_len = (unsigned char) (bar_width - fill_len);
+        for (i = 0; i < empty_len; i++)
+            bar_section[i] = '-';
+        bar_section[empty_len] = 0;
+        scr_text(bar_row, (unsigned char)(bar_col + 1 + fill_len), bar_section, 0);
+    }
+
+    /* Draw closing bracket. */
+    scr_text(bar_row, (unsigned char)(bar_col + bar_width + 1), "]", 0);
+}
+
 void ui_sent(void)
 {
     flat_screen();

@@ -18,6 +18,10 @@
 #include "../gmail.h"
 #include "platform.h"
 
+#define ASCII_FIRST         0x20
+#define ASCII_LAST          0x5F
+#define CHARSET_BIT         0x40
+
 #ifdef COCO3
 
 /* ------------------------------------------------------------------ */
@@ -55,32 +59,33 @@ static unsigned char *cell_at(unsigned char row, unsigned char col)
     return SCR_WIN + ((unsigned int) row * SCR_COLS + col) * 2;
 }
 
-static void blank_run(unsigned char *p, unsigned int cells)
-{
-    while (cells--) {
-        *p++ = SCR_BLANK;
-        *p++ = A_TEXT;
-    }
-}
+#define BLANK_RUN(p, cells) do { \
+    unsigned char *_p = (p); \
+    unsigned int _c = (cells); \
+    while (_c--) { \
+        *_p++ = SCR_BLANK; \
+        *_p++ = A_TEXT; \
+    } \
+} while(0)
 
 void scr_clear(void)
 {
     win_open();
-    blank_run(SCR_WIN, (unsigned int) SCR_COLS * SCR_ROWS);
+    BLANK_RUN(SCR_WIN, (unsigned int) SCR_COLS * SCR_ROWS);
     win_close();
 }
 
 void scr_row_clear(unsigned char row)
 {
     win_open();
-    blank_run(cell_at(row, 0), SCR_COLS);
+    BLANK_RUN(cell_at(row, 0), SCR_COLS);
     win_close();
 }
 
 void scr_rows_clear(unsigned char first, unsigned char last)
 {
     win_open();
-    blank_run(cell_at(first, 0),
+    BLANK_RUN(cell_at(first, 0),
               (unsigned int) (last - first + 1) * SCR_COLS);
     win_close();
 }
@@ -186,8 +191,9 @@ void scr_attr_run(unsigned char row, unsigned char col, unsigned char width,
  * register is six bits, two per gun -- so these are the brand colors at the
  * resolution the hardware has rather than approximations of them.
  */
-static void set_palette(void)
+void plat_init(void)
 {
+    width(80);
     paletteRGB(PAL_PAGE,   0, 0, 1);    /* dark blue page               */
     paletteRGB(PAL_PAPER,  3, 3, 3);    /* white: bar and envelope      */
     paletteRGB(PAL_RED,    3, 1, 1);    /* Gmail red                    */
@@ -196,18 +202,10 @@ static void set_palette(void)
     paletteRGB(PAL_GREEN,  1, 2, 1);    /* Gmail green                  */
     paletteRGB(PAL_BLACK,  0, 0, 0);
     paletteRGB(PAL_EMPH,   2, 2, 3);
-
     paletteRGB(8  + FG_WHITE,  2, 2, 2);
     paletteRGB(8  + FG_BLACK,  0, 0, 0);
     paletteRGB(8  + FG_BRIGHT, 3, 3, 3);
-
     setBorderColor(0x00);
-}
-
-void plat_init(void)
-{
-    width(80);
-    set_palette();
     scr_clear();
 }
 
@@ -238,10 +236,16 @@ static unsigned char sc(unsigned char c)
     if (c >= 'a' && c <= 'z')
         c = (unsigned char) (c - 0x20);         /* no lowercase in this ROM */
 
-    if (c < 0x20 || c > 0x5F)
+#ifdef COCO3
+    if (c < ASCII_FIRST || c > ASCII_LAST)
         c = '?';
+#else
+    /* CoCo 1/2: allow GLYPH_FILLED_BLOCK */
+    if (c < ASCII_FIRST || (c > ASCII_LAST && c != GLYPH_FILLED_BLOCK))
+        c = '?';
+#endif
 
-    return (unsigned char) (c | 0x40);
+    return (unsigned char) (c | CHARSET_BIT);
 }
 
 void scr_clear(void)
