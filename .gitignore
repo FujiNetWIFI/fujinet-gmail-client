@@ -3,9 +3,11 @@
 /r2r/
 /_cache/
 /release/
+/gen/
 
 # Host test binaries, one per screen shape
 /tests/hosttest
 /tests/hosttest80
 /tests/hosttest32
 /tests/hosttestadam
+/tests/hosttestnes

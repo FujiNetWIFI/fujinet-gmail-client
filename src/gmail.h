@@ -193,7 +193,39 @@ extern unsigned long gm_total;      /* total messages in the folder */
 extern unsigned char gm_next;       /* is there a page after this one */
 extern unsigned char gm_list_valid; /* a usable listing is on screen */
 
+/*
+ * The wrapped body, read through body_row(r) everywhere outside body.c.
+ *
+ * Every backend but one keeps it as the plain array below, where body_row()
+ * is a cast and costs nothing. The NES cannot: 8K of cartridge RAM is the
+ * whole of its variable space, so the rows live in CHR-RAM the CPU can only
+ * reach through the PPU, a row at a time, in blank time. GM_FAR_BODY is that
+ * arrangement. The backend owns the store and supplies the two calls;
+ * body.c wraps each line into a small staging array and hands the rows over
+ * with body_put_rows().
+ *
+ * body_row()'s copy is valid until the next call -- one row in hand at a
+ * time, which is all the reader and the forward emit ever need. Rows are
+ * written BODY_COLS bytes at a time and need not be terminated in the store;
+ * the copy always is.
+ *
+ * BODY_STAGE is the most rows one LINE_CAP line can wrap to. A greedy wrap
+ * fills at least half a row before it starts the next, so 2 x LINE_CAP /
+ * cols bounds it; the 2 covers the first and last partial rows. It has to be
+ * a true bound, not a guess: staging fewer rows than a line needs would
+ * ellipsize it as if the whole body were full. tests/farbody.c checks it.
+ */
+#ifdef GM_FAR_BODY
+#ifdef GM_RT_COLS
+#error "GM_FAR_BODY sizes its staging from BODY_COLS; it does not do GM_RT_COLS"
+#endif
+#define BODY_STAGE  ((2 * LINE_CAP) / BODY_COLS + 2)
+const char   *body_row(unsigned int r);
+void          body_put_rows(unsigned int r, const char *rows, unsigned char n);
+#else
 extern char          gm_body[BODY_ROWS][BODY_STRIDE];
+#define body_row(r)  ((const char *) gm_body[(r)])
+#endif
 extern unsigned int  gm_body_rows;
 extern unsigned char gm_body_trunc;
 

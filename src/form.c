@@ -271,11 +271,15 @@ static void emit_forward(unsigned char had_intro)
     gm_send_put("\n");
 
     for (r = 0; r < gm_body_rows; r++) {
-        if (gm_send_room() < strlen(gm_body[r]) + 33) {
+        /* One body_row() in hand at a time: put_line() copies it out into
+           frm.line before the next call can reuse the buffer. */
+        const char *row = body_row(r);
+
+        if (gm_send_room() < strlen(row) + 33) {
             cut = 1;
             break;
         }
-        put_line("", gm_body[r]);
+        put_line("", row);
     }
 
     if (cut)

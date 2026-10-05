@@ -37,7 +37,7 @@ CFLAGS  ?= -O1 -g -Wall -Wextra -Wno-unused-parameter
 
 # Keep in step with CFLAGS_EXTRA_APPLE2ENH in the top-level Makefile.
 CFLAGS80 = -DBODY_COLS=78 -DBODY_ROWS=176 -DLINE_CAP=256 -DENT_SUBJ_LEN=128
-CFLAGS80 += -DFRM_NBODY=56 -DFRM_VBODY=14 -DFRM_BODY_COLS=76
+CFLAGS80 += -DFRM_NBODY=42 -DFRM_VBODY=14 -DFRM_BODY_COLS=76
 
 # Keep in step with CFLAGS_EXTRA_COCO. LINE_CAP is absent from both, on purpose:
 # the CoCo keeps the 200-byte default.
@@ -60,21 +60,33 @@ CFLAGSDOS += -DFRM_NBODY=56 -DFRM_VBODY=14 -DFRM_BODY_COLS=76
 # GM_RT_COLS hook and a wrap far narrower than its stride.
 CFLAGSDOS40 = $(CFLAGSDOS) -DGM_RT_COLS -DGM_TEST_COLS=38
 
+# Keep in step with CFLAGS_EXTRA_NES. The NES is the one shape whose body is
+# not an array: GM_FAR_BODY keeps the rows in CHR-RAM, and farbody.c stands in
+# for the store with the same unterminated 64-byte rows plus fences and
+# poisoned copies. Every assertion above runs through body_row() and so
+# covers the far path as well; test_farbody() adds what only it can get
+# wrong. 64 columns is also the widest wrap of any 6502 shape.
+CFLAGSNES = -DGM_FAR_BODY -DIDX_MAX=10 -DENT_SUBJ_LEN=96 -DBODY_COLS=64
+CFLAGSNES += -DBODY_ROWS=1728 -DLINE_CAP=256 -DMSG_ROWS=20
+CFLAGSNES += -DFRM_NBODY=32 -DFRM_VBODY=10 -DFRM_BODY_COLS=62
+
 SRC = hosttest.c ../src/wrap.c ../src/sanitize.c ../src/body.c ../src/date.c \
       ../src/form.c ../src/tick.c
 
-all: hosttest hosttest80 hosttest32 hosttestadam hosttestdos hosttestdos40
+all: hosttest hosttest80 hosttest32 hosttestadam hosttestdos hosttestdos40 \
+     hosttestnes
 	./hosttest
 	./hosttest80
 	./hosttest32
 	./hosttestadam
 	./hosttestdos
 	./hosttestdos40
+	./hosttestnes
 
 # Makefile is a prerequisite because the shapes are defined in it: editing
 # CFLAGS32 to match a backend and getting a stale binary that still asserts the
 # old width is a confusing way to spend ten minutes.
-DEPS = $(SRC) ../src/gmail.h Makefile
+DEPS = $(SRC) ../src/gmail.h Makefile farbody.c
 
 hosttest: $(DEPS)
 	$(CC) $(CFLAGS) -o $@ $(SRC)
@@ -94,7 +106,11 @@ hosttestdos: $(DEPS)
 hosttestdos40: $(DEPS)
 	$(CC) $(CFLAGS) $(CFLAGSDOS40) -o $@ $(SRC)
 
+hosttestnes: $(DEPS)
+	$(CC) $(CFLAGS) $(CFLAGSNES) -o $@ $(SRC) farbody.c
+
 clean:
-	rm -f hosttest hosttest80 hosttest32 hosttestadam hosttestdos hosttestdos40
+	rm -f hosttest hosttest80 hosttest32 hosttestadam hosttestdos hosttestdos40 \
+	      hosttestnes
 
 .PHONY: all clean

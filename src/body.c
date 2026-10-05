@@ -15,7 +15,12 @@
 
 #include "gmail.h"
 
+#ifdef GM_FAR_BODY
+/* A line's rows, wrapped here and then handed to the backend's store. */
+static char   stage[BODY_STAGE][BODY_STRIDE];
+#else
 char          gm_body[BODY_ROWS][BODY_STRIDE];
+#endif
 unsigned int  gm_body_rows;
 unsigned char gm_body_trunc;
 
@@ -55,8 +60,23 @@ static void flush_line(void)
     }
 
     avail = BODY_ROWS - gm_body_rows;
+#ifdef GM_FAR_BODY
+    {
+        unsigned char n;
+
+        /* Staging fewer rows than avail is only safe because BODY_STAGE is
+           more than any one line can need -- see gmail.h. */
+        if (avail > BODY_STAGE)
+            avail = BODY_STAGE;
+        n = (unsigned char) wrap_text(linebuf, stage[0], avail,
+                                      WRAP_COLS, BODY_STRIDE);
+        body_put_rows(gm_body_rows, stage[0], n);
+        gm_body_rows += n;
+    }
+#else
     gm_body_rows += wrap_text(linebuf, gm_body[gm_body_rows],
                               avail, WRAP_COLS, BODY_STRIDE);
+#endif
 
     if (gm_body_rows >= BODY_ROWS)
         gm_body_trunc = 1;

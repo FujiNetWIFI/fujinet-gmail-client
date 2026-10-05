@@ -86,6 +86,30 @@ static void cap_reset(void)
     cap_buf[0] = '\0';
 }
 
+/*
+ * Fill body row r with n copies of c, whichever way this shape stores rows.
+ * The forward-budget test needs a body at its cap without a megabyte of
+ * ingest, and in a GM_FAR_BODY shape there is no array to memset.
+ */
+#ifdef GM_FAR_BODY
+void farbody_reset(void);
+int  farbody_fences_ok(void);
+#endif
+
+static void body_fill_row(unsigned int r, char c, unsigned char n)
+{
+#ifdef GM_FAR_BODY
+    char row[BODY_STRIDE];
+
+    memset(row, c, n);
+    row[n] = '\0';
+    body_put_rows(r, row, 1);
+#else
+    memset(gm_body[r], c, n);
+    gm_body[r][n] = '\0';
+#endif
+}
+
 static int failures;
 static int checks;
 
@@ -214,11 +238,11 @@ static void rows_fit(const char *what)
 
     checks++;
     for (i = 0; i < gm_body_rows; i++) {
-        if (strlen(gm_body[i]) > WRAP_COLS) {
+        if (strlen(body_row(i)) > WRAP_COLS) {
             failures++;
             printf("  FAIL %s: row %u is %u wide, cap is %u\n       \"%s\"\n",
-                   what, i, (unsigned int) strlen(gm_body[i]),
-                   (unsigned int) WRAP_COLS, gm_body[i]);
+                   what, i, (unsigned int) strlen(body_row(i)),
+                   (unsigned int) WRAP_COLS, body_row(i));
             return;
         }
     }
@@ -237,11 +261,11 @@ static void test_body(void)
     ingest_str("alpha\x9b" "bravo\r\n" "charlie\n" "delta\r" "echo");
     body_finish();
     eq_int("mixed EOL rows", gm_body_rows, 5);
-    eq_str("EOL 0", gm_body[0], "alpha");
-    eq_str("EOL 1", gm_body[1], "bravo");
-    eq_str("EOL 2", gm_body[2], "charlie");
-    eq_str("EOL 3", gm_body[3], "delta");
-    eq_str("EOL 4", gm_body[4], "echo");
+    eq_str("EOL 0", body_row(0), "alpha");
+    eq_str("EOL 1", body_row(1), "bravo");
+    eq_str("EOL 2", body_row(2), "charlie");
+    eq_str("EOL 3", body_row(3), "delta");
+    eq_str("EOL 4", body_row(4), "echo");
 
     /* A blank source line survives as one blank row, so paragraph breaks are
        still visible. */
@@ -249,16 +273,16 @@ static void test_body(void)
     ingest_str("one\n\ntwo\n");
     body_finish();
     eq_int("paragraph rows", gm_body_rows, 3);
-    eq_str("para 0", gm_body[0], "one");
-    eq_str("para 1", gm_body[1], "");
-    eq_str("para 2", gm_body[2], "two");
+    eq_str("para 0", body_row(0), "one");
+    eq_str("para 1", body_row(1), "");
+    eq_str("para 2", body_row(2), "two");
 
     /* A lone trailing CR at the very end must not leave a dangling blank. */
     body_reset();
     ingest_str("only\r\n");
     body_finish();
     eq_int("trailing crlf rows", gm_body_rows, 1);
-    eq_str("trailing crlf", gm_body[0], "only");
+    eq_str("trailing crlf", body_row(0), "only");
 
     /* $9B has to be recognised as a terminator *before* the charset rules see
        it as a high byte, or the whole message arrives as one line. */
@@ -266,7 +290,7 @@ static void test_body(void)
     ingest_str("a\x9b" "b\x9b" "c");
     body_finish();
     eq_int("9b is EOL not '?'", gm_body_rows, 3);
-    eq_str("9b row 0", gm_body[0], "a");
+    eq_str("9b row 0", body_row(0), "a");
 
     /* Overflowing the line accumulator must break at a word boundary, not
        slice a word in half. */
@@ -278,7 +302,7 @@ static void test_body(void)
     body_finish();
     checks++;
     for (i = 0; i < gm_body_rows; i++) {
-        const char *r = gm_body[i];
+        const char *r = body_row(i);
         size_t len = strlen(r);
         if (len == 0)
             continue;
@@ -348,18 +372,24 @@ static void test_body_width(void)
     rows_fit("token paragraph");
 
     /* A single token three rows long has nowhere to break, so it is hard split
-       at exactly the width -- every row but the last is full. */
+       at exactly the width -- every row but the last is full. Three rows, or
+       two where the accumulator holds fewer: the NES's LINE_CAP is 160 at 64
+       columns, and a longer token is cut at LINE_CAP by flush_overflow()
+       before the wrapper ever sees it -- correct, but a different test. */
     body_reset();
-    for (i = 0; i < WRAP_COLS * 3; i++)
-        big[i] = 'x';
-    big[WRAP_COLS * 3] = '\0';
-    ingest_str(big);
-    body_finish();
-    eq_int("hard split rows", gm_body_rows, 3);
-    rows_fit("hard split");
-    eq_int("split row 0 is full", strlen(gm_body[0]), WRAP_COLS);
-    eq_int("split row 1 is full", strlen(gm_body[1]), WRAP_COLS);
-    eq_int("split row 2 is full", strlen(gm_body[2]), WRAP_COLS);
+    {
+        unsigned int nrows = (LINE_CAP >= WRAP_COLS * 3) ? 3 : 2;
+
+        for (i = 0; i < WRAP_COLS * nrows; i++)
+            big[i] = 'x';
+        big[WRAP_COLS * nrows] = '\0';
+        ingest_str(big);
+        body_finish();
+        eq_int("hard split rows", gm_body_rows, nrows);
+        rows_fit("hard split");
+        for (i = 0; i < nrows; i++)
+            eq_int("split row is full", strlen(body_row(i)), WRAP_COLS);
+    }
 
     /* The ellipsis path writes into the last row it is allowed, which is the
        one place a row can be built up rather than copied. */
@@ -614,10 +644,8 @@ static void test_form(void)
         unsigned long full;
         unsigned int  r;
 
-        for (r = 0; r < BODY_ROWS; r++) {
-            memset(gm_body[r], 'x', WRAP_COLS);
-            gm_body[r][WRAP_COLS] = '\0';
-        }
+        for (r = 0; r < BODY_ROWS; r++)
+            body_fill_row(r, 'x', WRAP_COLS);
         gm_body_rows = BODY_ROWS;
         gm_body_trunc = 0;
 
@@ -883,6 +911,104 @@ static void test_tick(void)
 
 /* ------------------------------------------------------------------ */
 
+#ifdef GM_FAR_BODY
+/*
+ * The far store's own edges. Everything above already ran through
+ * body_row(), so the wrap and forward assertions cover the far path as they
+ * stand; what is left is what only this arrangement can get wrong.
+ */
+static void test_farbody(void)
+{
+    static char   rows[LINE_CAP][BODY_STRIDE];
+    static char   line[LINE_CAP + 1];
+    unsigned int  wl, n, worst = 0, i;
+    unsigned char pat;
+
+    /* A row exactly BODY_COLS wide has no terminator in the store. */
+    body_reset();
+    for (i = 0; i < BODY_COLS; i++)
+        line[i] = (char) ('a' + i % 26);
+    line[BODY_COLS] = '\0';
+    ingest_str(line);
+    ingest_str("\nnext\n");
+    body_finish();
+    eq_int("full row count", gm_body_rows, 2);
+    eq_str("full row round trip", body_row(0), line);
+    eq_str("row after full row", body_row(1), "next");
+    eq_int("fences after full rows", farbody_fences_ok(), 1);
+
+    /*
+     * BODY_STAGE has to bound every line LINE_CAP can hold, or body.c would
+     * ellipsize a line as if the whole body were full. Sweep word lengths and
+     * the three shapes that waste most of a row -- uniform words, a short
+     * word ahead of each long one, and long words with doubled spaces --
+     * wrapping each into far more rows than staging has, and keep the worst.
+     */
+    for (pat = 0; pat < 3; pat++) {
+        for (wl = 1; wl <= BODY_COLS + 4; wl++) {
+            n = 0;
+            while (n < LINE_CAP) {
+                unsigned int k, len = wl;
+
+                if (pat == 1 && (n / (wl + 3)) % 2 == 0)
+                    len = 1;
+                for (k = 0; k < len && n < LINE_CAP; k++)
+                    line[n++] = 'w';
+                if (n < LINE_CAP)
+                    line[n++] = ' ';
+                if (pat == 2 && n < LINE_CAP)
+                    line[n++] = ' ';
+            }
+            line[n] = '\0';
+            n = wrap_text(line, rows[0], LINE_CAP, WRAP_COLS, BODY_STRIDE);
+            if (n > worst)
+                worst = n;
+        }
+    }
+    checks++;
+    if (worst > BODY_STAGE) {
+        failures++;
+        printf("  FAIL a LINE_CAP line wraps to %u rows, BODY_STAGE is %u\n",
+               worst, (unsigned int) BODY_STAGE);
+    }
+
+    /* And through the real ingest: LINE_CAP worth of 33-character words is
+       one flush, and none of its rows may come back ellipsized. */
+    body_reset();
+    n = 0;
+    while (n + 34 <= LINE_CAP) {
+        memset(line + n, 'q', 33);
+        line[n + 33] = ' ';
+        n += 34;
+    }
+    line[n] = '\0';
+    ingest_str(line);
+    body_finish();
+    checks++;
+    for (i = 0; i < gm_body_rows; i++) {
+        if (strstr(body_row(i), "...")) {
+            failures++;
+            printf("  FAIL staged line ellipsized at row %u\n", i);
+            break;
+        }
+    }
+    eq_int("body not truncated by staging", gm_body_trunc, 0);
+
+    /* Filling to the cap through the far store neither truncates early nor
+       writes past the end. */
+    body_reset();
+    for (i = 0; i < BODY_ROWS + 10; i++)
+        ingest_str("row\n");
+    body_finish();
+    eq_int("far cap rows", gm_body_rows, BODY_ROWS);
+    eq_int("far cap flagged", gm_body_trunc, 1);
+    eq_str("far last row", body_row(BODY_ROWS - 1), "row");
+    eq_int("fences at the cap", farbody_fences_ok(), 1);
+}
+#endif
+
+/* ------------------------------------------------------------------ */
+
 int main(void)
 {
 #ifdef GM_RT_COLS
@@ -897,6 +1023,9 @@ int main(void)
            (unsigned int) BODY_ROWS, (unsigned int) LINE_CAP,
            (unsigned int) ENT_SUBJ_LEN);
 
+#ifdef GM_FAR_BODY
+    farbody_reset();
+#endif
     test_sanitize();
     test_wrap();
     test_body();
@@ -905,6 +1034,10 @@ int main(void)
     test_form();
     test_spill();
     test_tick();
+#ifdef GM_FAR_BODY
+    test_farbody();
+    eq_int("far store fences", farbody_fences_ok(), 1);
+#endif
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures != 0;

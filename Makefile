@@ -17,6 +17,7 @@ PLATFORMS += apple2enh
 PLATFORMS += atari
 PLATFORMS += coco
 PLATFORMS += msdos
+PLATFORMS += nes
 
 # You can run 'make <platform>' to build for a specific platform,
 # or 'make <platform>/<target>' for a platform-specific target.
@@ -26,7 +27,7 @@ PLATFORMS += msdos
 
 # SRC_DIRS may use the literal %PLATFORM% token.
 # It expands to the chosen PLATFORM plus any of its combos.
-SRC_DIRS = src src/%PLATFORM%
+SRC_DIRS = src src/%PLATFORM% gen/%PLATFORM%
 
 # FUJINET_LIB can be
 # - a version number such as 4.7.6
@@ -299,6 +300,82 @@ LDFLAGS_EXTRA_MSDOS += OPTION stack=4096
 # fnlib.py downloads the msdos release archive into the project's _cache/:
 #
 #   defoogi make msdos FUJINET_LIB=
+
+# The NES is the FujiNet NES cartridge running this image as an MMC3 board:
+# 128K PRG, 128K CHR-RAM, 8K WRAM (src/nes/gmail-nes.cfg, src/nes/neshw.h).
+# The screen is a 64 x 28 bitmap of 4 x 8 text, and the message body lives in
+# CHR-RAM -- GM_FAR_BODY, 64 bytes a row, 1728 rows -- because the 8K of WRAM
+# is every variable the program has. That is also what every other number
+# here is spent against. In round figures: the text screen's shadow 1.8K, the
+# form 2.2K, the index 1.5K, net.c 0.5K, the wrap staging 0.9K. The C stack
+# and the body store's write ring are in the console's own RAM. Check
+# __BSS_RUN__ + __BSS_SIZE__ in build/gmail-nes.map against $8000 before
+# raising any of them, and the -DGM_FAKE_DATA build too.
+#
+#   LINE_CAP 256 is the longest paragraph line that wraps as one; past that
+#   the accumulator breaks it at a space (body.c), which shows as a short row
+#   in the middle of the paragraph. It costs its own size again in staging.
+#   IDX_MAX 10 and MSG_ROWS 20 are the screen: two rows a message (colour is
+#   two rows deep), and the reader's body between its header and hint bar.
+#   ENT_SUBJ_LEN 96 is a row and a half of the panel; the wire's 128 would
+#   cost 320 bytes for the last 32 characters of ten subjects.
+#   FRM_NBODY 32 is three screens of the form's ten-line window.
+#   GM_RXBUF 256: fujinet-lib's NES reads go to 1K, but the loop drains the
+#   channel either way and the RAM is worth more elsewhere.
+#
+# The program is banked one screen to a bank (gmail-nes.cfg). The portable
+# core is in the fixed half and R7 (form.c, compose.c, main.c and date.c, by
+# CODE2 below), except net.c, clock.c and hwm.c, which go to the NET bank under nb_* names (NET_RENAMES) so that the real names
+# can be src/nes/tramp.c's stubs that map the bank on the way in.
+#
+# fujinet-lib is fujinet-lib-experimental's add-nes branch, built here by
+# tools/nes/mkfnlib.sh (FNLIB_NES names the checkout).
+ifeq ($(PLATFORM),nes)
+  FUJINET_LIB := __UNDEFINED__
+  LIBS += build/fnlib-nes/fujinet-nes.lib
+endif
+FNLIB_NES ?= $(HOME)/Workspace/fujinet-lib-experimental
+
+CFLAGS_EXTRA_NES  = -Os -DGM_FAR_BODY -DMSG_ROWS=20 -DIDX_MAX=10
+CFLAGS_EXTRA_NES += -DBODY_COLS=64 -DBODY_ROWS=1728 -DLINE_CAP=256
+CFLAGS_EXTRA_NES += -DENT_SUBJ_LEN=96 -DGM_RXBUF=256
+CFLAGS_EXTRA_NES += -DFRM_NBODY=32 -DFRM_VBODY=10 -DFRM_BODY_COLS=62
+
+# tools/nes-shot.sh's knobs (GM_FAKE_DATA, GM_FAKE_KEYS), set from its
+# command line the way the other capture scripts set theirs.
+CFLAGS_EXTRA_NES += $(NES_SHOT_FLAGS)
+ASFLAGS_EXTRA_NES += $(NES_SHOT_ASFLAGS)
+
+EXTRA_INCLUDE_NES += build/fnlib-nes/include gen/nes
+LDFLAGS_EXTRA_NES += -C src/nes/gmail-nes.cfg -m build/gmail-nes.map -Ln build/gmail-nes.lbl
+EXECUTABLE_EXTRA_DEPS_NES += src/nes/gmail-nes.cfg build/fnlib-nes/fujinet-nes.lib
+
+NSOBJ = build/$(PRODUCT)/nes/src
+NET_RENAMES  = -Dgm_fetch_index=nb_fetch_index -Dgm_fetch_body=nb_fetch_body
+NET_RENAMES += -Dgm_send_begin=nb_send_begin -Dgm_send_put=nb_send_put
+NET_RENAMES += -Dgm_send_room=nb_send_room -Dgm_send_end=nb_send_end
+NET_RENAMES += -Dclock_load=nb_clock_load -Dhwm_load=nb_hwm_load
+NET_RENAMES += -Dhwm_flags=nb_hwm_flags -Dhwm_update=nb_hwm_update
+$(NSOBJ)/net.o $(NSOBJ)/clock.o $(NSOBJ)/hwm.o: \
+    CFLAGS += --code-name NETBANK --rodata-name NETRO $(NET_RENAMES)
+$(NSOBJ)/form.o $(NSOBJ)/compose.o $(NSOBJ)/main.o $(NSOBJ)/date.o: \
+    CFLAGS += --code-name CODE2 --rodata-name RODATA2
+
+# The claim, the vectors, no read-modify-write of the mailbox, and room.
+nes/executable-post::
+	python3 tools/nes/checkrom.py build/gmail-nes.map $(EXECUTABLE)
+
+# Generated before the platform pass, which lists gen/nes/ when it starts.
+ifeq ($(PLATFORM),)
+r2r/nes/$(PRODUCT): gen/nes/font.s build/fnlib-nes/fujinet-nes.lib
+endif
+
+gen/nes/font.s gen/nes/art.s gen/nes/art.h: assets/nes/font4x8.txt \
+    assets/nes/sprites.txt tools/nes/mkgfx.py
+	python3 tools/nes/mkgfx.py assets/nes gen/nes
+
+build/fnlib-nes/fujinet-nes.lib:
+	sh tools/nes/mkfnlib.sh $(FNLIB_NES) build/fnlib-nes
 
 # HIRESTXT_LIB can be
 # - a version number such as 0.5.0.2

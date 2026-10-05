@@ -8,9 +8,10 @@ Two implementations live here:
 
 - `intv/` — the original, in IntyBASIC for the Intellivision.
 - `src/` — the C port. `src/` is portable across MekkoGX platforms; each target
-  supplies a backend under `src/<platform>/`. **Atari 8-bit** and **Apple //e
-  (enhanced)** are done in cc65, **Tandy Color Computer** in CMOC, and
-  **Coleco Adam** in z88dk.
+  supplies a backend under `src/<platform>/`. **Atari 8-bit**, **Apple //e
+  (enhanced)** and the **NES** (on the FujiNet NES cartridge) are done in
+  cc65, **Tandy Color Computer** in CMOC, **Coleco Adam** in z88dk, and
+  **MS-DOS** in Open Watcom.
 
 The Apple II target is `apple2enh`. `apple2` is not a build of this: it is the
 unenhanced machine, with no MouseText and a character generator that would
@@ -249,6 +250,27 @@ leaves and the **left arrow erases** — BASIC's own convention, and with it
 spent there is no key left to walk the cursor: editing is append-and-backspace,
 in uppercase, because the 6847 has no lowercase to type or show.
 
+The NES has a controller and, optionally, a Famicom keyboard on the expansion
+port -- Nintendo's Family BASIC keyboard or the Subor -- found at start-up and
+then read alongside the pad, so either works at any moment:
+
+| Button | Inbox | Reader | Form |
+|---|---|---|---|
+| d-pad | move, page at the edges; `◄►` page | line / page | move on the on-screen keyboard |
+| `A` | open | reply | type the key under the cursor |
+| `B` | — | back | delete (repeats when held) |
+| `START` | compose | forward | done: `Send?` if anything was typed |
+| `SELECT` | refresh | — | next keyboard page: `abc`, `ABC`, `#+=` |
+
+At the `Send?` ask, `A` sends, `START` discards and `B` goes back to editing.
+The on-screen keyboard's bottom row carries `SPACE`, `◄` `►` (the cursor),
+`DEL`, `NEXT` (next field), the page key, `SEND` (send without the ask) and
+`DONE`. A keyboard does what every other machine's does -- arrows, `RETURN` to
+open, `ESC` (or `BS`) back, `C` compose, `R` reply or refresh, `F` forward,
+`CLR HOME` refresh -- and in the form it types, `RETURN` or `TAB` for the next
+field and `ESC` for done. Nothing quits: the console has nowhere to go back to,
+and `RESET` starts the program over.
+
 MS-DOS takes the CoCo's split — `ESC` backs out of the reader and is inert in
 the inbox, `Q` quits — and adds `PgUp`/`PgDn` as aliases for the page keys,
 because they are free on this keyboard and they are what a DOS user's fingers
@@ -277,7 +299,19 @@ make coco               # -> r2r/coco/gmail.bin and gmail.dsk
 defoogi make adam FUJINET_LIB=   # -> r2r/adam/gmail.ddp
 
 defoogi make msdos FUJINET_LIB=  # -> r2r/msdos/gmail.exe and gmail.img
+
+make nes                # -> r2r/nes/gmail.nes   (MMC3, 128K PRG + 128K CHR-RAM)
 ```
+
+The NES build needs Python 3 for the art (`tools/nes/mkgfx.py` turns
+`assets/nes/font4x8.txt` and `sprites.txt` into `gen/nes/`) and a checkout of
+[fujinet-lib-experimental](https://github.com/FujiNetWIFI/fujinet-lib-experimental)'s
+`add-nes` branch, which `tools/nes/mkfnlib.sh` compiles into
+`build/fnlib-nes/` -- `FNLIB_NES` in the `Makefile` names it, and defaults to
+`~/Workspace/fujinet-lib-experimental`. `tools/nes/checkrom.py` runs after the
+link and deletes an image that is missing the cartridge's `FUJI` claim, has its
+reset vector outside the fixed banks, or has any read-modify-write instruction
+aimed at the mailbox's write-only pages.
 
 The CoCo build needs `cmoc` and `decb` (from
 [toolshed](https://github.com/nitros9project/toolshed)) rather than cc65. Its
@@ -400,6 +434,16 @@ config is named `86Box.cfg`. The driver sets DOS's clock from the FujiNet at
 load, but the client does not read the DOS clock — it asks the clock device
 for the ISO form directly, because the `+HHMM` offset is what turns the wire's
 UTC timestamps into a local date column.
+
+The NES runs on the FujiNet NES cartridge, whose firmware is in
+`fujinet-firmware`'s `pico/nes/` and whose far end is the ESP32's
+`fujiversal-nes` build. Put `gmail.nes` where the NES CONFIG can see it and
+boot it from there; the FujiNet pushes the image to the cartridge, which runs
+it as an MMC3 board. With no hardware,
+[FujiNet Go NES](https://github.com/FujiNetWIFI/fujinet-go-nes-desktop) is the
+whole rig in one program -- MesenCE with the cartridge board and fujinet-pc
+built in -- and *Open Cartridge…* runs the image in place of CONFIG. It can
+also attach either Famicom keyboard.
 
 Gmail needs a Google grant with the `gmail.readonly` and `gmail.send` scopes,
 authorized through the FujiNet Web UI — and it is per fujinet-pc instance, so
@@ -612,6 +656,36 @@ That sampling is the only reason this backend has a frame wait at all. It has no
 wall clock and no alarms, but a sampled PC has to land somewhere with a name on
 it, so `plat_key_block()` polls `inkey()` around a tight `plat_vsync()` spin
 rather than blocking in the BASIC ROM's keyboard scan.
+
+`tools/nes-shot.sh` is the sixth. It runs the image headless in FujiNet Go NES's
+own core (`libnes_session.a`, the emulator and the in-process FujiNet
+together), through `tools/nes/harness.c` -- built by
+`tools/nes/build-harness.sh` from the desktop app's build tree -- and like the
+others it reads the program's memory rather than the picture: the text comes
+from the text screen's shadow in WRAM, found by label. The bitmap has no
+character codes in it to read back. What it adds is `check`, which holds the
+frame the PPU actually drew to that text cell by cell -- each cell's glyph out of
+the font in the ROM, every ink pixel one colour, every paper pixel another --
+skipping only what a sprite covers. That is the test of the whole display
+engine at once: the composer, the drain, the interrupt's band switches.
+
+```sh
+tools/nes-shot.sh inbox                            # canned data, first screen
+tools/nes-shot.sh reader "K_DOWN,K_ENTER,K_RIGHT"  # scripted keys
+tools/nes-shot.sh osk "K_COMPOSE" -- "pad a" "pad right" "pad a"   # the pad
+tools/nes-shot.sh kbd --kbd fb -- "type c" "sleep 500" "type hi"   # a keyboard
+FAIL=212 tools/nes-shot.sh err "K_COMPOSE,97,E_ENTER,98,E_SAVE"    # an error
+GRANT=~/path/to/fnconfig.ini REAL=1 tools/nes-shot.sh real          # real Gmail
+```
+
+Each run writes `build/shots/NAME.txt` (the screen, with every two-row band's
+palette in the margin: `P`aper, `S`election, `G`rey, `R`ed) and `NAME.png`.
+Commands after `--` go to the harness once the scripted keys have run out.
+`GRANT` lends the run another FujiNet's Google grant: the harness's FujiNet is
+a throwaway with its own config, so it copies just the `[GoogleDrive]` section
+out of the named `fnconfig.ini` into FujiNet Go NES's own. The harness
+needs the BoIP port the desktop app uses, so it cannot run while the app is
+open.
 
 `-DGM_FAKE_DATA` replaces both fetches with generators that deliberately hit
 the awkward cases — an empty display name, fields straddling every column
@@ -1233,6 +1307,103 @@ rows it does at 78, and one binary has to be ready for either width.
 `GM_RXBUF` goes to 1 K because every `network_read` is a whole INT F5/RS-232
 round trip.
 
+## NES implementation notes
+
+cc65, MMC3 (mapper 4), on the FujiNet NES cartridge: 128K of PRG in sixteen 8K
+banks, **128K of CHR-RAM**, 8K of WRAM at `$6000`. fujinet-lib is
+fujinet-lib-experimental's `add-nes` target, whose bus is the cartridge's
+mailbox at `$5000-$5FFF`. Its two rules shape the code everywhere: nothing ever
+does a read-modify-write of `$5500-$57FF` (`checkrom.py` enforces it), and the
+image carries `"FUJI"` at `$FFF0`, or the cartridge shuts the mailbox down once
+it boots. Neither interrupt handler touches the mailbox, so a transaction in
+flight -- `fn_commit()` busy-waits up to twelve seconds -- survives any number
+of frames, and the busy dots keep bobbing through it.
+
+**The screen is a bitmap.** Sixty-four columns of the Tom Thumb 3 x 5 font
+(`assets/nes/font4x8.txt`) in 4 x 8 cells is 32 tiles a row and 896 on the
+screen, against a pattern table's 256. So every cell of name table rows 2-29 is
+a tile of its own that never changes, only its pixels do, and MMC3's scanline
+counter switches the background's table every eight text rows -- at lines 7,
+71, 135 and 199 -- with a vertical scroll of 8 so the text sits in the NTSC
+safe area. A switch lands a few dozen cycles into its band's first line, which
+is harmless only because that line is row 0 of a text row and blank in every
+glyph: `mkgfx.py` refuses a glyph that draws there.
+
+Plane 1 of every bitmap tile is `$FF` and only plane 0 is drawn, so a pixel is
+paper or ink and **all colour comes from the attribute table**, four columns by
+two rows at a time. Every layout is built on that: a message in the list is two
+rows because a highlight is, the four palettes are page (white and black),
+selection (Gmail's pale blue), read mail and quiet text (grey ink) and the app
+bars (Gmail red), and anything in more than two colours is a sprite -- the
+Gmail M in its four colours on a white square of its own in the app bar, the
+same M doubled on the flat screens, Google's four loading dots, and the form's
+cursor. A three-pixel font has no bold face that reads, so unread mail is told
+the way Gmail tells it, by the paper: white with a dot for unread, grey for
+read.
+
+**Drawing is three stages.** A painter only writes characters into a 28 x 64
+shadow in WRAM; `scr_put()` compares as it copies and marks just the tiles that
+changed. Between frames the main program composes the first dirty row into a
+stage in console RAM -- two glyph-row lookups and an `ORA` per tile row, from
+tables `mkgfx.py` lays out page-aligned in R7 -- and the interrupt at line 231
+switches the screen off and copies it in, with the palette, the attributes and
+the body store's transfers, for as long as its budget lasts. A whole new
+screen is quicker with the screen off for a few frames, so the painters do
+that (`scr_begin()`/`scr_end()`), and everything after -- a selection moving,
+a key echoed, a line scrolled -- goes through the shadow while the screen
+stays on.
+
+Two things here took a debugger to find, and both are comments at the place
+they bit. The drain's budget is not a speed setting: a drain that runs past the
+end of the vertical blank leaves the screen being switched on mid-frame, that
+frame comes out blank, and the next drain writes VRAM while the PPU is
+rendering, which is how the attribute table filled with glyph bytes. And
+switching rendering off is not free either: doing it during a line's sprite
+fetches, which is exactly when the line-231 interrupt arrives, corrupts a row
+of OAM that the PPU then overwrites with row 0 when rendering resumes -- after
+the frame's DMA -- and the app bar's white square vanished. The store now
+waits for the middle of line 232.
+
+**The message body lives in CHR-RAM** (`GM_FAR_BODY`). 8K of WRAM is every
+variable the program has; the screen and the sprites use 20K of the 128K
+CHR-RAM, and the other 108K hold 1728 rows of 64 -- a long message is safe, a
+465-row one from a real mailbox included. The CPU reaches it only through the
+PPU, so a row's bank goes into R5 -- a 1K window at `$1C00` no sprite draws
+from -- and the drain moves rows in the blank, writes through a ring of four in
+console RAM so a body arriving off the network rarely waits, reads one at a
+time. The core sees two calls, `body_row()` and `body_put_rows()`, and
+`tests/farbody.c` puts the same contract on the host with fences and poisoned
+copies. The reader scrolls a line by moving nineteen rows it already has in
+the shadow and fetching one.
+
+**One bank per screen.** The fixed half (`$C000`) and R7 (`$A000`, never
+switched) are the 24K every bank can call: the runtime, fujinet-lib, the
+display engine, the font, and the core but for the network. `net.c`, `clock.c`
+and `hwm.c` go to the NET bank under `nb_*` names (`NET_RENAMES`), and each
+screen -- BOOT with the flat screens, INBOX, READER, COMPOSE with the
+on-screen keyboard -- has an 8K bank to itself at `$8000`. `src/nes/tramp.c`
+gives gmail.h's names to all of it: one-line stubs through cc65's
+`#pragma wrapped-call`, whose `bank_tramp` (`crt0.s`) maps the bank and puts
+the caller's back. `ui_error()` is the one with something to do on the way:
+`gm_stage` points at a literal in the NET bank, which shares the window with
+BOOT, so the words are copied across first.
+
+**Two FujiNet behaviours this bus does not share** with the others, both in
+`src/net.c` under `__NES__`. A failed open comes back as device error 144 with
+no protocol status beside it, so the client asks for one, as it does on
+SmartPort and DOS -- otherwise an unauthorized grant reads as a timeout. And
+this FujiNet's NDevice forgets a channel at its close, so the status that
+follows a send always answers 207, *not connected*: the verdict is the close's
+own ACK or NAK, and that is what the NES reports.
+
+The splash waits for the cartridge's link bit before main() asks the FujiNet
+anything, for up to fifteen seconds, because straight after power-on the first
+question goes out before it can be answered.
+
+On the cartridge's MAME model, which reloads the scanline counter a line later
+than MesenCE and the hardware, build with
+`make nes NES_SHOT_ASFLAGS="--asm-define IRQ_EARLY=-1"`.
+
 ## Limitations
 
 Inherited from the adapter and the original, not accidents of the port:
@@ -1249,6 +1420,9 @@ Inherited from the adapter and the original, not accidents of the port:
   wrapped display rows, so what it forwards is the message at this screen's
   width (32–78 columns), and a forward that would exceed the adapter's 16K
   draft cap is cut at a row boundary with `[forwarded message truncated]`.
+- **On the NES a refused send cannot say why.** The commit's verdict there is
+  the close's ACK or NAK and nothing more, so any refusal reads as `Draft
+  rejected`.
 - **The Apple II reports sends optimistically.** The IWM bus layer discards
   the commit verdict the close latches, so a rejected or failed send still
   shows `Message sent` there. Open-side and write-side failures still report
@@ -1362,6 +1536,23 @@ src/msdos/      MS-DOS backend
   fuji_msdos.c  the adapter probe, guarding a null INT F5 vector
   net_msdos.c   network_error/read/write and the open, replacing library bugs
   AUTOEXEC.BAT  @ECHO OFF and GMAIL, copied onto the disk with mcopy -t
+src/nes/        NES backend (the FujiNet NES cartridge, MMC3)
+  platform.h    the backend's internal API, glyph codes, input events
+  neshw.h       the banks, the CHR layout, the interface to crt0.s and ppu.s
+  gmail-nes.cfg the linker config: sixteen PRG banks, one per screen
+  crt0.s        header, start-up, the NMI and the scanline IRQs, bank_tramp
+  ppu.s         the composer and the blank-time drain
+  scr.c         the text shadow, attributes, screen-off painting
+  bodystore.c   the message body in CHR-RAM (GM_FAR_BODY)
+  tramp.c       gmail.h's names for the banked code; the link wait
+  header.c      the app bar, the hint bar, the clock
+  sprites.c     the Gmail M, the busy dots, the cursor
+  input.c       the controller, the Famicom keyboards, the frame wait
+  ui_boot.c     BOOT: setting up, and the flat screens
+  ui_inbox.c    INBOX: the list
+  ui_reader.c   READER: one message
+  ui_form.c     COMPOSE: the form and the on-screen keyboard
+assets/nes/     the font and the sprites, as text art
 tests/          host-native tests, built once per screen shape
 tools/          headless capture and decode, per platform
 intv/           the IntyBASIC original, built on its own
