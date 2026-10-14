@@ -16,6 +16,7 @@ PLATFORMS += adam
 PLATFORMS += apple2enh
 PLATFORMS += atari
 PLATFORMS += coco
+PLATFORMS += h89-cpm
 PLATFORMS += msdos
 
 # You can run 'make <platform>' to build for a specific platform,
@@ -342,6 +343,78 @@ LDFLAGS_EXTRA_MSDOS += OPTION stack=4096
 #
 #   defoogi make msdos FUJINET_LIB=
 
+# The Heathkit H89 runs CP/M (h89-cpm) or HDOS; only CP/M is built. The
+# backend is src/h89/ through PLATFORM_COMBOS, and it draws on the H19
+# terminal: 80x24, plus a 25th line that holds the keys.
+#
+# The screen is the Apple //e's 80 columns, so the knobs start as the Apple's.
+# BODY_COLS is 76 because the reader's body sits inside a frame two columns
+# in from each side, and MSG_ROWS is 19 because the frame's edges take the
+# two rows of 3-23 the Apple would spend on text. FRM_BODY_COLS is a column
+# under that, so a full line still leaves the cursor a cell inside the same
+# frame on the form.
+#
+# Memory is the constraint here, not speed. z88dk links from 0100H and sets
+# the stack at the BDOS, overwriting the CCP; a 62K CP/M -- what FNDISK needs
+# -- has the BDOS at D806H, so tools/h89/budget.py fails the link if the end
+# of BSS is past D406H (a 1K stack). Against that the H19's two screen copies
+# are 4K, the index 2.9K and the form 3.4K, and gm_body takes what is left:
+# BODY_ROWS x 77. Check budget.py's line in the build output before raising
+# it, and check the -DGM_FAKE_DATA build too -- tools/h89-shot.sh's, which
+# links the canned wire data as well and is the one that runs out first.
+# GM_RXBUF is halved to 256, as the calendar client does here: a few more bus
+# calls a message, for headroom under the ceiling.
+CFLAGS_EXTRA_H89-CPM  = -DBUILD_H89 -O3 -DGM_PROGRESS_UI
+CFLAGS_EXTRA_H89-CPM += -DBODY_COLS=76 -DBODY_ROWS=$(H89_BODY_ROWS)
+CFLAGS_EXTRA_H89-CPM += -DLINE_CAP=256 -DENT_SUBJ_LEN=128 -DMSG_ROWS=19
+CFLAGS_EXTRA_H89-CPM += -DFRM_NBODY=42 -DFRM_VBODY=14 -DFRM_BODY_COLS=75
+CFLAGS_EXTRA_H89-CPM += -DGM_RXBUF=256
+
+# tools/h89-shot.sh appends -DGM_FAKE_DATA through here. BODY_ROWS is a make
+# variable rather than a -D on the command line because zcc will not let a
+# later -D redefine an earlier one, -U or no -U.
+CFLAGS_EXTRA_H89-CPM += $(H89_SHOT_FLAGS)
+H89_BODY_ROWS ?= 160
+
+# Nothing here opens a file, reads argv or touches stdio, so the CP/M crt
+# need not set up any of them. -m keeps the map budget.py reads.
+LDFLAGS_EXTRA_H89-CPM  = -m -pragma-define:CLIB_OPEN_MAX=0
+LDFLAGS_EXTRA_H89-CPM += -pragma-define:CRT_ENABLE_STDIO=0
+LDFLAGS_EXTRA_H89-CPM += -pragma-define:CRT_ENABLE_COMMANDLINE=0
+
+# fujinet-lib for the H89 is the h89-setup-after-reset branch, which has no
+# release archive (and carries fn_default_timeout / fn_device_error, which
+# net.c needs). `make h89-fnlib` copies a checkout (FNLIB_H89, by default the
+# one beside this repo) into _cache/, where the defoogi container can see it,
+# and the library is built from that copy by the same z88dk that links the
+# program:
+#
+#   make h89-fnlib
+#   defoogi make h89-cpm
+#
+# The copy's path is spelled out rather than built on $(CACHE_DIR): a
+# platform pass reads this file before mekkogx defines that, and the rule
+# below names its target as it is read. h89-fnlib itself and the post-link
+# step are further down, past the include, so that neither becomes what a
+# bare `make` builds.
+FNLIB_H89 ?= $(HOME)/Workspace/fujinet-lib
+FNLIB_H89_SRC = _cache/fujinet-lib-h89
+
+ifneq ($(filter h89-cpm h89-hdos,$(PLATFORM)),)
+  FUJINET_LIB := __UNDEFINED__
+  FNLIB_H89_LIB = $(FNLIB_H89_SRC)/r2r/$(PLATFORM)/fujinet.$(PLATFORM).lib
+  EXTRA_INCLUDE += $(FNLIB_H89_SRC)/include
+  LIBS += -L$(FNLIB_H89_SRC)/r2r/$(PLATFORM) -lfujinet.$(PLATFORM).lib
+  EXECUTABLE_EXTRA_DEPS += $(FNLIB_H89_LIB)
+
+# Every object includes the library's headers, so the library comes first.
+$(patsubst %.c,build/$(PRODUCT)/$(PLATFORM)/%.o,$(wildcard src/*.c src/h89/*.c)): | $(FNLIB_H89_LIB)
+
+$(FNLIB_H89_LIB):
+	@[ -d $(FNLIB_H89_SRC)/bus/h89 ] || { echo "No $(FNLIB_H89_SRC): run 'make h89-fnlib' on the host first" >&2; exit 1; }
+	MAKEFLAGS= $(MAKE) -C $(FNLIB_H89_SRC) $(PLATFORM)/r2r
+endif
+
 # HIRESTXT_LIB can be
 # - a version number such as 0.5.0.2
 # - a directory which contains the built library
@@ -358,9 +431,24 @@ PLATFORM_COMBOS = \
   atarixe+=atari \
   msxrom+=msx \
   msxdos+=msx \
-  adam_cpm+=adam
+  adam_cpm+=adam \
+  h89-cpm+=h89
 
 include mekkogx/toplevel-rules.mk
+
+# The H89's fujinet-lib, copied where defoogi can see it (see above).
+.PHONY: h89-fnlib
+h89-fnlib:
+	rm -rf $(FNLIB_H89_SRC)
+	mkdir -p $(FNLIB_H89_SRC)
+	cp -r $(FNLIB_H89)/Makefile $(FNLIB_H89)/include $(FNLIB_H89)/common $(FNLIB_H89)/bus $(FNLIB_H89)/makefiles $(FNLIB_H89_SRC)/
+	(cd $(FNLIB_H89) && git rev-parse --short HEAD && git status --porcelain Makefile bus/h89 common include makefiles) > $(FNLIB_H89_SRC)/VERSION
+
+# The H89's memory budget (see CFLAGS_EXTRA_H89-CPM), and the .COM cut where
+# BSS starts: z88dk writes BSS into it as zeros, which makes it too long for
+# the 62K CCP to load. The map is written beside the program.
+h89-cpm/executable-post::
+	python3 tools/h89/budget.py r2r/h89-cpm/gmail.map --trim $(wildcard r2r/h89-cpm/gmail.com r2r/h89-cpm/GMAIL.COM)
 
 # If you need to add extra platform-specific steps, do it below:
 #   coco/r2r:: coco/custom-step1

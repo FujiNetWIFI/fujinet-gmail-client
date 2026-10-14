@@ -156,13 +156,17 @@ struct wire_rec {
 #define GM_NOTFOUND     170
 #define GM_NOSERVICE    210
 #define GM_NOAUTH       212
+#define GM_NOTCONN      207     /* NDevice: no channel -- what STATUS says
+                                   after any close that succeeded */
 
 /*
  * fn_default_timeout is in 64-frame ticks. 15 (the library default) is ~16s;
  * a GMAIL index open is ~19 sequential upstream HTTPS round trips.
  *
- * SIO only. fujinet-lib reads this in exactly one place, the Atari bus layer's
- * copy_cmd_data.s, where it becomes DCB's DTIMLO. On SmartPort there is no
+ * SIO and the H89 only. fujinet-lib reads this in two places: the Atari bus
+ * layer's copy_cmd_data.s, where it becomes DCB's DTIMLO, and the H89's
+ * fuji_bus_call.c, where it is how long to wait on the card for a reply --
+ * in seconds there, so on the H89 90 is exactly 90. On SmartPort there is no
  * host-side timeout at all -- the call is into card firmware that blocks until
  * the FujiNet answers -- so the assignments in net.c compile, link and do
  * nothing there. They stay because they are correct from the same source on the

@@ -10,7 +10,7 @@ Two implementations live here:
 - `src/` — the C port. `src/` is portable across MekkoGX platforms; each target
   supplies a backend under `src/<platform>/`. **Atari 8-bit** and **Apple //e
   (enhanced)** are done in cc65, **Tandy Color Computer** in CMOC, and
-  **Coleco Adam** in z88dk.
+  **Coleco Adam** and the **Heathkit H89** (CP/M) in z88dk.
 
 The Apple II target is `apple2enh`. `apple2` is not a build of this: it is the
 unenhanced machine, with no MouseText and a character generator that would
@@ -95,6 +95,30 @@ single-line rule), the colour modes get an EDIT.EXE-family look with the hint
 bar pulled to Gmail red, and mode 7 is where the MDA earns its own column:
 intensity for unread rows, reverse video for the bars, and a real underline
 under the reader's subject — the one attribute no other adapter has.
+
+The H89 is the Apple's eighty columns drawn with the H19 terminal's own line
+characters, and a 25th line that holds the keys, their caps in reverse:
+
+```
+ ┌──┐ Gmail                                                              Inbox
+ │╲╱│ 137 messages
+ └──┘ 3 unread on this page                                               10:15
+──┤ Date ├──────┬─┤ From ├─────────────┬─┤ Subject ├────────────────────────────
+●→ Aug 29 09:32 │ Alice Kim            │ Re: lunch tomorrow
+●  Aug 29 07:02 │ Bob Chen             │ Invoice #22 is attached
+   Aug 29 04:32 │ Carol Diaz           │ Standup notes
+────────────────┴──────────────────────┴──────────────────────────┤ 1-16/137 ├──
+  Re: lunch tomorrow
+  from Alice Kim
+ RETURN Read  ^v Move  <> Page  BLUE Compose  GRAY Refresh  Q Quit
+```
+
+Row 0 is a reverse app bar with the mark as a notch of normal video in it and
+the folder as another, the way the Google Calendar client on the same machine
+shows its active view. The list is a ruled table whose column lines run
+through the selection bar; the reader puts the message in a frame with the
+page set into its bottom edge; the form frames the body the same way and puts
+the terminal's own block cursor at the edit point.
 
 **Compose / reply / forward** — one form serves all three: a To and a Subject
 field, then the body as line fields on the same editor. Printable keys insert
@@ -257,6 +281,16 @@ so the aliases are no worse there than anything else. In the form, `TAB` joins
 `RETURN` as next-field, because that is what a DOS user's fingers do in any
 form.
 
+The H89 takes the same split — `ESC` backs out and is inert in the inbox, `Q`
+quits — and gives the H19's coloured keys the meanings they have in the
+Google Calendar client on the same machine: **`BLUE`** composes (a new one),
+**`RED`** replies in the reader (act on this one; it does nothing in the
+inbox), and **`GRAY`** — or `f5`, or `HOME`, the calendar's "today" — goes back
+to the top of the inbox. `C`, `R` and `F` work as everywhere else. The keypad
+sends the arrows, `9` and `3` page as `PgUp`/`PgDn` would, and the 25th line
+names the keys each screen takes. In the form, `TAB` joins `RETURN`, `DELETE`
+and `BACKSPACE` both erase, and `BLUE` sends without the `Send? (Y/N)` ask.
+
 ---
 
 ## Building
@@ -277,6 +311,9 @@ make coco               # -> r2r/coco/gmail.bin and gmail.dsk
 defoogi make adam FUJINET_LIB=   # -> r2r/adam/gmail.ddp
 
 defoogi make msdos FUJINET_LIB=  # -> r2r/msdos/gmail.exe and gmail.img
+
+make h89-fnlib                   # once, and after any fujinet-lib change
+defoogi make h89-cpm             # -> r2r/h89-cpm/gmail.com and gmail.h8d
 ```
 
 The CoCo build needs `cmoc` and `decb` (from
@@ -329,6 +366,15 @@ video write on the retrace for the genuine IBM CGA, the one card that snows in
 80-column text. It is a switch rather than a heuristic because there is no
 reliable way to detect a true CGA and every other machine would pay the wait
 for a fault it does not have.
+
+The H89 build is z88dk too, in the same container. Its fujinet-lib is the
+`h89-setup-after-reset` branch, which has no release archive for `fnlib.py` to
+fetch, so `make h89-fnlib` (on the host) copies a checkout — `FNLIB_H89`, by
+default `~/Workspace/fujinet-lib` — into `_cache/`, and the build compiles it
+there with the z88dk that links the program. `gmail.h8d` is a 100 KB H17 data
+disk in Heath CP/M's format holding `GMAIL.COM`, made by `appmake` and run
+through `mekkogx/hz89-dir-fixup.py`, because Heath CP/M stops its directory
+search at the all-zero entries `appmake` leaves.
 
 `make apple2enh` needs `ac` and `acx` from
 [AppleCommander](https://github.com/AppleCommander/AppleCommander/releases/); it
@@ -401,6 +447,13 @@ load, but the client does not read the DOS clock — it asks the clock device
 for the ISO form directly, because the `+HHMM` offset is what turns the wire's
 UTC timestamps into a local date column.
 
+On the H89 the far end is the FujiNet card on the 82C55 at 0D0H — or, in
+[fujinet-go-h89-desktop](https://github.com/tschak909/fujinet-go-h89-desktop),
+the same card emulated, with fujinet-pc-**rs232** on its BoIP port. Boot CP/M,
+put `gmail.h8d` in a second drive and run `B:GMAIL`, or mount it on the
+FujiNet and run it through FNDISK. It needs a 62K CP/M or larger, which is
+also what FNDISK needs.
+
 Gmail needs a Google grant with the `gmail.readonly` and `gmail.send` scopes,
 authorized through the FujiNet Web UI — and it is per fujinet-pc instance, so
 a grant authorized against the Atari build's config is not visible to the CoCo
@@ -434,8 +487,9 @@ make -C tests
 
 Built once per screen shape, because the core's fixed widths are overridable
 and every backend overrides them: `hosttest` is the Atari's shape, `hosttest80`
-the Apple II's, `hosttest32` the CoCo's, `hosttestadam` the Adam's, and
-`hosttestdos`/`hosttestdos40` the two faces of the MS-DOS build. That is the
+the Apple II's, `hosttest32` the CoCo's, `hosttestadam` the Adam's,
+`hosttestdos`/`hosttestdos40` the two faces of the MS-DOS build, and
+`hosttesth89` the H89's 76-column frame. That is the
 only way the width-dependent paths get covered at widths the Atari never
 reaches in either direction, and the assertion that earns the extra binaries is
 the one that checks no produced row is wider than the wrap width — a
@@ -612,6 +666,28 @@ That sampling is the only reason this backend has a frame wait at all. It has no
 wall clock and no alarms, but a sampled PC has to land somewhere with a name on
 it, so `plat_key_block()` polls `inkey()` around a tight `plat_vsync()` spin
 rather than blocking in the BASIC ROM's keyboard scan.
+
+`tools/h89-shot.sh` is the H89's capture, in fujinet-go-h89-desktop's
+`h89_headless`: it boots the 64K CP/M disk that emulator ships from one H17
+drive, runs `B:GMAIL` from another, presses H19 keys by name, and writes the
+screen as text and as a PNG at each `shot`. The text has no reverse video in
+it, so the bars and the keycaps are checked in the PNG — `tools/h89/revmap.py`
+prints which cells of one are reverse.
+
+```sh
+tools/h89-shot.sh                              # canned data, the inbox
+tools/h89-shot.sh "down return shot down shot" # read, then a line down
+tools/h89-shot.sh "blue type:a@b.c shot"       # the form, typed into
+REAL=1 FUJINET=127.0.0.1:9995 TIMEOUT=300 tools/h89-shot.sh "wait:60000 shot"
+```
+
+`REAL=1` runs against a live fujinet-pc-rs232 over BoIP and without `--warp`,
+because warp resumes after two seconds of card silence and a Gmail open is
+far longer than that. `tools/h89/hostrun.sh` is the same program built
+natively on the host with canned data, its console bytes fed through
+`tools/h89/h19model.py`, a model of the H19: seconds to see a screen, and with
+`RAW=1` the bytes themselves — which is how the reader's line scroll is seen
+to cost one line and not nineteen.
 
 `-DGM_FAKE_DATA` replaces both fetches with generators that deliberately hit
 the awkward cases — an empty display name, fields straddling every column
@@ -1233,6 +1309,74 @@ rows it does at 78, and one binary has to be ready for either width.
 `GM_RXBUF` goes to 1 K because every `network_read` is a whole INT F5/RS-232
 round trip.
 
+## H89 implementation notes
+
+A CP/M program for the Heathkit H89 and its H19 terminal: z88dk (sccz80),
+fujinet-lib's H89 bus over the FujiNet card's 82C55 at 0D0H. The terminal
+layer — `h19.c`, `con.c`, `kbd.c` — is the Google Calendar client's H89 port,
+which took it from fujinet-config, and the chrome follows that client too, so
+the two read as one family on the one machine.
+
+**The screen is on the far end of a 9600-baud line.** The H19 is a terminal,
+about a thousand characters a second, and the program cannot read back what is
+on it — so nothing here writes to it directly. Every painter writes cells into
+a copy of the screen, and `src/h89/h19.c` sends only what differs from what
+the terminal already shows, once per wait for a key. A whole inbox is about
+two kilobytes, two seconds; moving the selection is a couple of hundred bytes.
+What follows from it:
+
+- **Busy is said in place.** A refresh puts `Opening mailbox...` on the inbox's
+  own status row and the wait on the 25th line, and the list stays where it
+  is; only boot, with nothing on screen yet, uses the flat busy screen. The
+  progress bar is the 25th line too — reverse cells for what is done, the
+  checkerboard for what is not — and each step of it is a few bytes.
+- **The reader scrolls with the terminal's delete and insert line.** A line
+  down changes every row of the body, which no difference can make cheap, so
+  `h19_scroll()` moves what the terminal shows with `ESC M` at one end of the
+  frame and `ESC L` at the other, and the difference then sends the one line
+  that came in: about 100 bytes, against 800 for a page.
+- **A sent message is said on the form.** `Message sent` goes on the status
+  row of the form it was sent from, rather than on a flat screen that would
+  cost a whole screen before the caller paints its own back.
+
+**The H19's graphics characters** draw the rest: the inbox is a table with
+ruled columns, labels set into its top rule and the page into its bottom one,
+and the column lines are painted in the bar's video so the selection is one
+piece with the lines running through it. The reader and the form are framed
+boxes, which is why `BODY_COLS` is 76 here and `MSG_ROWS` 19. The unread
+marker is the H19's bullet and the caret its arrow. The mark on the flat
+screens is the Apple's stencil with its staircases straightened: the H19 has a
+triangle filling the upper-left half of a cell and one filling the
+upper-right, and reverse video turns each into its opposite, so all four
+half-cells a diagonal edge can leave are there and the M's strokes run
+straight. The header's small mark is an envelope in line characters, its flap
+the terminal's two diagonals.
+
+**The send verdict is the close's, not STATUS's.** The H89's FujiNet is the
+NDevice firmware, which drops the channel at a close that succeeds, so a
+STATUS after it answers 207 (not connected) whatever happened. `gm_send_end()`
+takes the close's own ACK or NAK instead, and after a NAK asks STATUS once for
+the adapter's reason, which a failed close leaves behind. `open_error()` gained
+`__H89__` for the same family of reason: the H89's bus layer answers a refused
+open with device error 144 and never writes `fn_network_error`, so the 212
+authorize-in-the-Web-UI error has to be asked for. On this bus
+`fn_default_timeout` is in seconds, so `TMO_LONG` is exactly 90.
+
+**Memory is the limit, not speed.** z88dk links from 0100H, sets the stack at
+the BDOS and runs over the CCP. The smallest system worth running on is the
+62K one FNDISK needs, BDOS at D806H; `tools/h89/budget.py` runs after every
+link and fails it past D406H (a 1K stack), because past the BDOS it does not
+fail politely — the startup clears BSS, wipes the BDOS with it, and hangs. The
+program ends at about CC50H, almost 2K clear of it, with 160 body rows; the
+canned-data build, which carries the wire data too, has 1.3K. The same script
+cuts the `.COM` where BSS begins: z88dk writes BSS into it as zeros, which
+would end it past the 62K CCP, and the CCP would refuse it as a BAD LOAD.
+
+z88dk's sccz80 has one trap worth knowing: arithmetic on a function call's
+pointer result (`h19_line(row) + col`) is scaled as if it pointed at ints, so
+the text lands at twice the column. Through a variable it is a byte pointer
+again (see `scr_field()`).
+
 ## Limitations
 
 Inherited from the adapter and the original, not accidents of the port:
@@ -1252,7 +1396,7 @@ Inherited from the adapter and the original, not accidents of the port:
 - **The Apple II reports sends optimistically.** The IWM bus layer discards
   the commit verdict the close latches, so a rejected or failed send still
   shows `Message sent` there. Open-side and write-side failures still report
-  normally; the other four buses report the real verdict.
+  normally; the other buses report the real verdict.
 - **Inbox only.** The adapter accepts any label as a folder; the folder name is
   hardcoded here.
 - **Read/unread is local**, a single 8-byte timestamp in a FujiNet appkey
@@ -1362,6 +1506,16 @@ src/msdos/      MS-DOS backend
   fuji_msdos.c  the adapter probe, guarding a null INT F5 vector
   net_msdos.c   network_error/read/write and the open, replacing library bugs
   AUTOEXEC.BAT  @ECHO OFF and GMAIL, copied onto the disk with mcopy -t
+src/h89/        Heathkit H89 (CP/M) backend
+  platform.h    geometry, the graphics glyphs as string bytes, internal API
+  h19.c         the H19's screen: two copies, sent by difference; the scroll
+  con.c         raw console I/O through the CP/M BIOS jump table
+  kbd.c         the H19's escape sequences decoded into key codes
+  screen.c      cells into the copy: fields, rules, boxes, the 25th line
+  ui.c          every painter, the in-place busy screens and the progress bar
+  logo.c        the "M": a stencil with triangle edges, and a line envelope
+  timer.c       the 2 ms CP/M tick, folded into 50 frames a second
+  input.c       key mapping, the colour keys, and the flush before each wait
 tests/          host-native tests, built once per screen shape
 tools/          headless capture and decode, per platform
 intv/           the IntyBASIC original, built on its own
@@ -1374,7 +1528,9 @@ glob steps over it and it reaches the compiler only as an `-I`.
 
 Built on [MekkoGX](https://github.com/FozzTexx/MekkoGX), a cross-platform build
 template for retro machines: that glob is what picks up `src/atari/`,
-`src/apple2enh/`, `src/coco/`, `src/adam/` and `src/msdos/` automatically, and
+`src/apple2enh/`, `src/coco/`, `src/adam/`, `src/msdos/` and `src/h89/`
+automatically (the last through `PLATFORM_COMBOS`, which maps `h89-cpm` to
+it), and
 `FUJINET_LIB` is what fetches and links
 fujinet-lib. `mekkogx/platforms/apple2enh.mk` is a copy of `apple2.mk` rather
 than an include of it, because `common.mk` derives `PLATFORM` from the file that
