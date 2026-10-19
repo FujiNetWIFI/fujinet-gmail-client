@@ -10,7 +10,7 @@ Two implementations live here:
 - `src/` — the C port. `src/` is portable across MekkoGX platforms; each target
   supplies a backend under `src/<platform>/`. **Atari 8-bit** and **Apple //e
   (enhanced)** are done in cc65, **Tandy Color Computer** in CMOC, and
-  **Coleco Adam** and the **Heathkit H89** (CP/M) in z88dk.
+  **Coleco Adam** and the **Heathkit H89** (CP/M and HDOS) in z88dk.
 
 The Apple II target is `apple2enh`. `apple2` is not a build of this: it is the
 unenhanced machine, with no MouseText and a character generator that would
@@ -314,6 +314,7 @@ defoogi make msdos FUJINET_LIB=  # -> r2r/msdos/gmail.exe and gmail.img
 
 make h89-fnlib                   # once, and after any fujinet-lib change
 defoogi make h89-cpm             # -> r2r/h89-cpm/gmail.com and gmail.h8d
+defoogi make h89-hdos            # -> r2r/h89-hdos/gmail.abs and gmail.h8d
 ```
 
 The CoCo build needs `cmoc` and `decb` (from
@@ -374,7 +375,10 @@ default `~/Workspace/fujinet-lib` — into `_cache/`, and the build compiles it
 there with the z88dk that links the program. `gmail.h8d` is a 100 KB H17 data
 disk in Heath CP/M's format holding `GMAIL.COM`, made by `appmake` and run
 through `mekkogx/hz89-dir-fixup.py`, because Heath CP/M stops its directory
-search at the all-zero entries `appmake` leaves.
+search at the all-zero entries `appmake` leaves. The HDOS `gmail.h8d` holds
+`GMAIL.ABS` with its overlays packed after it, and goes through
+`mekkogx/hdos-dir-fixup.py`, because `appmake` writes the file's last-sector
+count one short.
 
 `make apple2enh` needs `ac` and `acx` from
 [AppleCommander](https://github.com/AppleCommander/AppleCommander/releases/); it
@@ -452,7 +456,10 @@ On the H89 the far end is the FujiNet card on the 82C55 at 0D0H — or, in
 the same card emulated, with fujinet-pc-**rs232** on its BoIP port. Boot CP/M,
 put `gmail.h8d` in a second drive and run `B:GMAIL`, or mount it on the
 FujiNet and run it through FNDISK. It needs a 62K CP/M or larger, which is
-also what FNDISK needs.
+also what FNDISK needs. Under HDOS 2.0, `MOUNT SY1:` and `RUN SY1:GMAIL.ABS`,
+or with `gmail.h8d` in a FujiNet slot, `LOAD FN:`, `MOUNT FN0:` and
+`RUN FN0:GMAIL.ABS`. It needs a 64K H89, and fits with FN: loaded; with LP:
+loaded too it says so and goes back to the prompt.
 
 Gmail needs a Google grant with the `gmail.readonly` and `gmail.send` scopes,
 authorized through the FujiNet Web UI — and it is per fujinet-pc instance, so
@@ -679,6 +686,9 @@ tools/h89-shot.sh                              # canned data, the inbox
 tools/h89-shot.sh "down return shot down shot" # read, then a line down
 tools/h89-shot.sh "blue type:a@b.c shot"       # the form, typed into
 REAL=1 FUJINET=127.0.0.1:9995 TIMEOUT=300 tools/h89-shot.sh "wait:60000 shot"
+OS=hdos TIMEOUT=300 tools/h89-shot.sh "return shot" # HDOS 2.0, SY1:GMAIL.ABS
+OS=hdos STACK=1 tools/h89-shot.sh "return red"      # and how deep the stack went
+tools/h89/hdos-fn0.sh                          # HDOS, FN: loaded, RUN FN0:GMAIL.ABS
 ```
 
 `REAL=1` runs against a live fujinet-pc-rs232 over BoIP and without `--warp`,
@@ -1311,7 +1321,7 @@ round trip.
 
 ## H89 implementation notes
 
-A CP/M program for the Heathkit H89 and its H19 terminal: z88dk (sccz80),
+A CP/M and HDOS program for the Heathkit H89 and its H19 terminal: z88dk (sccz80),
 fujinet-lib's H89 bus over the FujiNet card's 82C55 at 0D0H. The terminal
 layer — `h19.c`, `con.c`, `kbd.c` — is the Google Calendar client's H89 port,
 which took it from fujinet-config, and the chrome follows that client too, so
@@ -1371,6 +1381,22 @@ program ends at about CC50H, almost 2K clear of it, with 160 body rows; the
 canned-data build, which carries the wire data too, has 1.3K. The same script
 cuts the `.COM` where BSS begins: z88dk writes BSS into it as zeros, which
 would end it past the 62K CCP, and the CCP would refuse it as a BAD LOAD.
+
+**HDOS has 44.5K where CP/M has 54K, so it has overlays.** HDOS loads a
+program at 2280H and keeps everything from S.SYSM - S.OMAX up for itself and
+its drivers: D090H with FN: loaded, as it is when the program runs from a
+FujiNet disk. Three screens' code takes turns in a 5.5K window at 2480H -- the
+index fetch, the inbox and reader together, and the form -- read when wanted
+from the end of `GMAIL.ABS`, which HDOS leaves open on channel -1 whichever
+disk it came from (`src/h89/ovl.asm`). A call into one is marked `GM_OVL`
+(sccz80's `__banked`) and goes through `banked_call`, which loads the overlay
+and, on the way back, the caller's if it was displaced. Opening a message and
+going back loads nothing; a page change or the form loads one or two, a few
+seconds each from an H17. `tools/h89/hdosovl.py` fails the link on any other call
+into an overlay, an overlay bigger than the window, or BSS past D090H, then
+packs the overlays onto the file. BSS is not in the file, so
+`src/h89/tpa.asm` checks that HDOS has room for it before clearing it. The
+reader keeps 132 body rows to CP/M's 160.
 
 z88dk's sccz80 has one trap worth knowing: arithmetic on a function call's
 pointer result (`h19_line(row) + col`) is scaled as if it pointed at ints, so
@@ -1506,16 +1532,20 @@ src/msdos/      MS-DOS backend
   fuji_msdos.c  the adapter probe, guarding a null INT F5 vector
   net_msdos.c   network_error/read/write and the open, replacing library bugs
   AUTOEXEC.BAT  @ECHO OFF and GMAIL, copied onto the disk with mcopy -t
-src/h89/        Heathkit H89 (CP/M) backend
+src/h89/        Heathkit H89 (CP/M and HDOS) backend
   platform.h    geometry, the graphics glyphs as string bytes, internal API
   h19.c         the H19's screen: two copies, sent by difference; the scroll
-  con.c         raw console I/O through the CP/M BIOS jump table
+  con.c         raw console I/O: the CP/M BIOS jump table, or HDOS's SCALLs
   kbd.c         the H19's escape sequences decoded into key codes
   screen.c      cells into the copy: fields, rules, boxes, the 25th line
-  ui.c          every painter, the in-place busy screens and the progress bar
+  ui.c          the chrome, the flat screens and the in-place busy screens
+  ui_*.c        the painters of one screen each, so each rides its overlay
   logo.c        the "M": a stencil with triangle edges, and a line envelope
-  timer.c       the 2 ms CP/M tick, folded into 50 frames a second
+  timer.c       the 2 ms tick, folded into 50 frames a second
   input.c       key mapping, the colour keys, and the flush before each wait
+  ovl.asm       HDOS: the overlay loader, banked_call
+  tpa.asm       HDOS: the room for BSS checked before it is cleared
+  mmap.inc      HDOS: z88dk's memory map, plus the overlays
 tests/          host-native tests, built once per screen shape
 tools/          headless capture and decode, per platform
 intv/           the IntyBASIC original, built on its own
@@ -1529,8 +1559,8 @@ glob steps over it and it reaches the compiler only as an `-I`.
 Built on [MekkoGX](https://github.com/FozzTexx/MekkoGX), a cross-platform build
 template for retro machines: that glob is what picks up `src/atari/`,
 `src/apple2enh/`, `src/coco/`, `src/adam/`, `src/msdos/` and `src/h89/`
-automatically (the last through `PLATFORM_COMBOS`, which maps `h89-cpm` to
-it), and
+automatically (the last through `PLATFORM_COMBOS`, which maps `h89-cpm` and
+`h89-hdos` to it), and
 `FUJINET_LIB` is what fetches and links
 fujinet-lib. `mekkogx/platforms/apple2enh.mk` is a copy of `apple2.mk` rather
 than an include of it, because `common.mk` derives `PLATFORM` from the file that

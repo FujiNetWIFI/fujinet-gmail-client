@@ -127,6 +127,11 @@ void h19_bell(void)
   con_out(0x07);
 }
 
+/* The reader's alone, so under HDOS it rides in the reader's overlay. */
+#ifdef GM_OVERLAYS
+#pragma codeseg code_ovl_browse
+#endif
+
 static void go_line(uint8_t y)
 {
   esc('Y');
@@ -184,6 +189,10 @@ void h19_scroll(uint8_t y0, uint8_t y1, int8_t dir)
   }
   memset(&dirty[y0], 1, y1 - y0 + 1);
 }
+
+#ifdef GM_OVERLAYS
+#pragma codeseg code_compiler
+#endif
 
 /** 1 when the cell needs graphics mode, 0 when it needs it off, 2 when it
     looks the same either way */

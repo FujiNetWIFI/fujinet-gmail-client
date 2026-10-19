@@ -235,6 +235,16 @@ static void fail(unsigned char code)
 /* Index                                                               */
 /* ------------------------------------------------------------------ */
 
+/*
+ * Under HDOS the index fetch is an overlay of its own, the body fetch rides
+ * with the reader and the draft channel with the form (see the Makefile).
+ * Only the code moves: the literals stay resident, which is what keeps
+ * gm_stage pointing at one.
+ */
+#ifdef GM_OVERLAYS
+#pragma codeseg code_ovl_fetch
+#endif
+
 static void build_index_url(unsigned long range)
 {
     char num[12];
@@ -380,6 +390,10 @@ unsigned char gm_fetch_index(unsigned long range)
     return 1;
 }
 
+#ifdef GM_OVERLAYS
+#pragma codeseg code_compiler
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Body                                                                */
 /* ------------------------------------------------------------------ */
@@ -389,6 +403,10 @@ static void build_body_url(const char *msgnum)
     strcpy(url, "N:GMAIL:///INBOX/");
     strcat(url, msgnum);
 }
+
+#ifdef GM_OVERLAYS
+#pragma codeseg code_ovl_browse
+#endif
 
 unsigned char gm_fetch_body(const char *msgnum)
 {
@@ -453,6 +471,10 @@ unsigned char gm_fetch_body(const char *msgnum)
     plat_net_end();
     return 1;
 }
+
+#ifdef GM_OVERLAYS
+#pragma codeseg code_ovl_compose
+#endif
 
 /* ------------------------------------------------------------------ */
 /* The draft channel                                                   */
@@ -654,6 +676,10 @@ unsigned char gm_send_end(void)
 #endif
 }
 
+#ifdef GM_OVERLAYS
+#pragma codeseg code_compiler
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Fake data                                                           */
 /* ------------------------------------------------------------------ */
@@ -712,6 +738,10 @@ static const char *const fake_subj[8] = {
     "1",
     "Deployment window moved to Thursday 0200 UTC, please ack"
 };
+
+#ifdef GM_OVERLAYS
+#pragma codeseg code_ovl_fetch
+#endif
 
 static unsigned char fake_index(unsigned long range)
 {
@@ -809,6 +839,10 @@ static const unsigned char eol_crlf[2]    = { 0x0D, 0x0A };
 static const unsigned char eol_lf[1]      = { 0x0A };
 static const unsigned char eol_cr[1]      = { 0x0D };
 
+#ifdef GM_OVERLAYS
+#pragma codeseg code_ovl_browse
+#endif
+
 static unsigned char fake_body(void)
 {
     unsigned char rep, i;
@@ -852,5 +886,9 @@ static unsigned char fake_body(void)
 
     return 1;
 }
+
+#ifdef GM_OVERLAYS
+#pragma codeseg code_compiler
+#endif
 
 #endif /* GM_FAKE_DATA */

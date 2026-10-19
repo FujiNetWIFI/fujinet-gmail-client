@@ -89,6 +89,10 @@ void plat_anykey(void)
     key_wait();
 }
 
+#ifdef GM_OVERLAYS
+#pragma codeseg code_ovl_compose
+#endif
+
 /*
  * The compose form's read. BACKSPACE and DELETE both erase before the
  * cursor; BLUE sends without the question; the keypad's arrows move.
@@ -123,3 +127,7 @@ unsigned char plat_getch(void)
             return k;
     }
 }
+
+#ifdef GM_OVERLAYS
+#pragma codeseg code_compiler
+#endif

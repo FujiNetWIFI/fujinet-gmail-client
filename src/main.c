@@ -54,6 +54,13 @@ static void clock_resync(void)
     ui_clock();
 }
 
+/* Under HDOS the reader loop rides in the reader's overlay (see the Makefile). */
+static void read_message(void) GM_OVL;
+
+#ifdef GM_OVERLAYS
+#pragma codeseg code_ovl_browse
+#endif
+
 static void read_message(void)
 {
     unsigned int maxtop;
@@ -127,6 +134,10 @@ static void read_message(void)
         }
     }
 }
+
+#ifdef GM_OVERLAYS
+#pragma codeseg code_compiler
+#endif
 
 int main(void)
 {
