@@ -163,6 +163,10 @@ static unsigned char st_ok(unsigned char code)
  * addressable after a failed 'O', so the same single status query recovers
  * the protocol's own code.
  *
+ * The H89 is the same again: its FujiBus layer answers a NAKed open with
+ * fn_device_error 144 and never touches fn_network_error, and the firmware
+ * keeps the open's error for the STATUS that follows.
+ *
  * The fix is to ask, once. The channel is still addressable because
  * network_open set the unit before issuing the control command, and
  * network_status needs nothing else.
@@ -173,7 +177,7 @@ static unsigned char open_error(void)
        the failure path issues another device command and overwrites it. */
     gm_dev_ecode = fn_device_error;
 
-#if defined(__APPLE2__) || defined(__MSDOS__)
+#if defined(__APPLE2__) || defined(__MSDOS__) || defined(__H89__)
     {
         unsigned char dev  = gm_dev_ecode;
         unsigned char code = probe();
@@ -230,6 +234,16 @@ static void fail(unsigned char code)
 /* ------------------------------------------------------------------ */
 /* Index                                                               */
 /* ------------------------------------------------------------------ */
+
+/*
+ * Under HDOS the index fetch is an overlay of its own, the body fetch rides
+ * with the reader and the draft channel with the form (see the Makefile).
+ * Only the code moves: the literals stay resident, which is what keeps
+ * gm_stage pointing at one.
+ */
+#ifdef GM_OVERLAYS
+#pragma codeseg code_ovl_fetch
+#endif
 
 static void build_index_url(unsigned long range)
 {
@@ -376,6 +390,10 @@ unsigned char gm_fetch_index(unsigned long range)
     return 1;
 }
 
+#ifdef GM_OVERLAYS
+#pragma codeseg code_compiler
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Body                                                                */
 /* ------------------------------------------------------------------ */
@@ -385,6 +403,10 @@ static void build_body_url(const char *msgnum)
     strcpy(url, "N:GMAIL:///INBOX/");
     strcat(url, msgnum);
 }
+
+#ifdef GM_OVERLAYS
+#pragma codeseg code_ovl_browse
+#endif
 
 unsigned char gm_fetch_body(const char *msgnum)
 {
@@ -449,6 +471,10 @@ unsigned char gm_fetch_body(const char *msgnum)
     plat_net_end();
     return 1;
 }
+
+#ifdef GM_OVERLAYS
+#pragma codeseg code_ovl_compose
+#endif
 
 /* ------------------------------------------------------------------ */
 /* The draft channel                                                   */
@@ -574,13 +600,15 @@ unsigned char gm_send_end(void)
     return 1;
 #endif
 #else
+    unsigned char closed;
+
     gm_stage = "send";
 
     /* The close is the commit: the adapter builds the RFC822 message and
        runs the upstream send synchronously before acking, so it needs the
        widened SIO timeout just as much as the open did. */
     fn_default_timeout = TMO_LONG;
-    network_close(url);
+    closed = network_close(url);
     fn_default_timeout = TMO_NORM;
 
     if (wr_failed) {
@@ -598,6 +626,39 @@ unsigned char gm_send_end(void)
        send optimistically; README carries the caveat. */
     plat_net_end();
     return 1;
+#elif defined(__H89__)
+    /*
+     * The H89's FujiNet is the NDevice code, which drops the channel at a
+     * close that succeeds: a STATUS after it answers 207, not connected,
+     * whatever happened. The close's own ACK or NAK is the verdict instead.
+     * A NAK (144) leaves the adapter's reason behind for one STATUS to read;
+     * anything else is no answer at all, and then whether the mail went is
+     * not known -- which is not the same thing as refused.
+     */
+    if (closed == FN_ERR_OK) {
+        plat_net_end();
+        return 1;
+    }
+
+    gm_dev_ecode = fn_device_error;
+    if (gm_dev_ecode != 144) {
+        plat_net_end();
+        gm_ecode = 0;
+        return 0;
+    }
+
+    {
+        unsigned char code = probe();
+
+        plat_net_end();
+        gm_dev_ecode = 144;
+
+        /* A NAK that names no reason is still a refusal. */
+        gm_ecode = (unsigned char)
+            ((st_ok(code) || code == GM_NOREPLY || code == GM_NOTCONN)
+             ? GM_REJECTED : code);
+        return 0;
+    }
 #else
     {
         unsigned char code = probe();
@@ -614,6 +675,10 @@ unsigned char gm_send_end(void)
 #endif
 #endif
 }
+
+#ifdef GM_OVERLAYS
+#pragma codeseg code_compiler
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Fake data                                                           */
@@ -673,6 +738,10 @@ static const char *const fake_subj[8] = {
     "1",
     "Deployment window moved to Thursday 0200 UTC, please ack"
 };
+
+#ifdef GM_OVERLAYS
+#pragma codeseg code_ovl_fetch
+#endif
 
 static unsigned char fake_index(unsigned long range)
 {
@@ -770,6 +839,10 @@ static const unsigned char eol_crlf[2]    = { 0x0D, 0x0A };
 static const unsigned char eol_lf[1]      = { 0x0A };
 static const unsigned char eol_cr[1]      = { 0x0D };
 
+#ifdef GM_OVERLAYS
+#pragma codeseg code_ovl_browse
+#endif
+
 static unsigned char fake_body(void)
 {
     unsigned char rep, i;
@@ -813,5 +886,9 @@ static unsigned char fake_body(void)
 
     return 1;
 }
+
+#ifdef GM_OVERLAYS
+#pragma codeseg code_compiler
+#endif
 
 #endif /* GM_FAKE_DATA */

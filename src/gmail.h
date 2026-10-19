@@ -11,6 +11,17 @@
 
 #include <stdint.h>
 
+/*
+ * A function called into from outside the overlay it rides in, where there
+ * are overlays -- the H89 under HDOS (see the Makefile). The call then goes
+ * through the overlay loader. Everywhere else it is nothing.
+ */
+#ifdef GM_OVERLAYS
+#define GM_OVL __banked
+#else
+#define GM_OVL
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Sizing                                                              */
 /* ------------------------------------------------------------------ */
@@ -156,13 +167,17 @@ struct wire_rec {
 #define GM_NOTFOUND     170
 #define GM_NOSERVICE    210
 #define GM_NOAUTH       212
+#define GM_NOTCONN      207     /* NDevice: no channel -- what STATUS says
+                                   after any close that succeeded */
 
 /*
  * fn_default_timeout is in 64-frame ticks. 15 (the library default) is ~16s;
  * a GMAIL index open is ~19 sequential upstream HTTPS round trips.
  *
- * SIO only. fujinet-lib reads this in exactly one place, the Atari bus layer's
- * copy_cmd_data.s, where it becomes DCB's DTIMLO. On SmartPort there is no
+ * SIO and the H89 only. fujinet-lib reads this in two places: the Atari bus
+ * layer's copy_cmd_data.s, where it becomes DCB's DTIMLO, and the H89's
+ * fuji_bus_call.c, where it is how long to wait on the card for a reply --
+ * in seconds there, so on the H89 90 is exactly 90. On SmartPort there is no
  * host-side timeout at all -- the call is into card firmware that blocks until
  * the FujiNet answers -- so the assignments in net.c compile, link and do
  * nothing there. They stay because they are correct from the same source on the
@@ -298,9 +313,9 @@ unsigned char form_body_spill(unsigned char *line, unsigned char *pos);
 
 /* compose.c -- the form screen. Reply and forward act on gm_index[gm_sel];
    the caller repaints its own screen afterwards either way. */
-void          compose_new(void);
-void          compose_reply(void);
-void          compose_forward(void);
+void          compose_new(void) GM_OVL;
+void          compose_reply(void) GM_OVL;
+void          compose_forward(void) GM_OVL;
 
 /* ------------------------------------------------------------------ */
 /* Portable services                                                   */
@@ -325,7 +340,7 @@ void          body_ingest(const unsigned char *p, unsigned int n);
 void          body_finish(void);
 
 /* net.c -- both return 1 on success, 0 on failure with gm_ecode set. */
-unsigned char gm_fetch_index(unsigned long range);
+unsigned char gm_fetch_index(unsigned long range) GM_OVL;
 unsigned char gm_fetch_body(const char *msgnum);
 void          gm_calc_next(void);
 
@@ -456,8 +471,8 @@ void          ui_auth_phase(void);
 void          ui_fetch_progress(unsigned char current, unsigned char total);
 #endif
 void          ui_error(unsigned char code);
-void          ui_inbox(void);                   /* full repaint */
-void          ui_inbox_sel(unsigned char from, unsigned char to);
+void          ui_inbox(void) GM_OVL;            /* full repaint */
+void          ui_inbox_sel(unsigned char from, unsigned char to) GM_OVL;
 void          ui_message(unsigned int top);     /* header + body window */
 void          ui_sent(void);                    /* flat "message sent" screen */
 

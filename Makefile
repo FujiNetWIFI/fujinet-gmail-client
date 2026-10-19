@@ -16,6 +16,8 @@ PLATFORMS += adam
 PLATFORMS += apple2enh
 PLATFORMS += atari
 PLATFORMS += coco
+PLATFORMS += h89-cpm
+PLATFORMS += h89-hdos
 PLATFORMS += msdos
 
 # You can run 'make <platform>' to build for a specific platform,
@@ -342,6 +344,136 @@ LDFLAGS_EXTRA_MSDOS += OPTION stack=4096
 #
 #   defoogi make msdos FUJINET_LIB=
 
+# The Heathkit H89 runs CP/M (h89-cpm) or HDOS (h89-hdos). Both builds are
+# src/h89/ through PLATFORM_COMBOS, and draw on the H19 terminal: 80x24, plus
+# a 25th line that holds the keys.
+#
+# The screen is the Apple //e's 80 columns, so the knobs start as the Apple's.
+# BODY_COLS is 76 because the reader's body sits inside a frame two columns
+# in from each side, and MSG_ROWS is 19 because the frame's edges take the
+# two rows of 3-23 the Apple would spend on text. FRM_BODY_COLS is a column
+# under that, so a full line still leaves the cursor a cell inside the same
+# frame on the form.
+#
+# Memory is the constraint here, not speed. z88dk links from 0100H and sets
+# the stack at the BDOS, overwriting the CCP; a 62K CP/M -- what FNDISK needs
+# -- has the BDOS at D806H, so tools/h89/budget.py fails the link if the end
+# of BSS is past D406H (a 1K stack). Against that the H19's two screen copies
+# are 4K, the index 2.9K and the form 3.4K, and gm_body takes what is left:
+# BODY_ROWS x 77. Check budget.py's line in the build output before raising
+# it, and check the -DGM_FAKE_DATA build too -- tools/h89-shot.sh's, which
+# links the canned wire data as well and is the one that runs out first.
+# GM_RXBUF is halved to 256, as the calendar client does here: a few more bus
+# calls a message, for headroom under the ceiling.
+H89_KNOBS  = -DBUILD_H89 -O3 -DGM_PROGRESS_UI -DBODY_COLS=76
+H89_KNOBS += -DLINE_CAP=256 -DENT_SUBJ_LEN=128 -DMSG_ROWS=19
+H89_KNOBS += -DFRM_NBODY=42 -DFRM_VBODY=14 -DFRM_BODY_COLS=75
+H89_KNOBS += -DGM_RXBUF=256
+
+# tools/h89-shot.sh appends -DGM_FAKE_DATA through here. BODY_ROWS is a make
+# variable rather than a -D on the command line because zcc will not let a
+# later -D redefine an earlier one, -U or no -U.
+H89_KNOBS += $(H89_SHOT_FLAGS)
+CFLAGS_EXTRA_H89-CPM = $(H89_KNOBS) -DBODY_ROWS=$(H89_BODY_ROWS)
+H89_BODY_ROWS ?= 160
+
+# Nothing here opens a file, reads argv or touches stdio, so the CP/M crt
+# need not set up any of them. -m keeps the map budget.py reads.
+LDFLAGS_EXTRA_H89-CPM  = -m -pragma-define:CLIB_OPEN_MAX=0
+LDFLAGS_EXTRA_H89-CPM += -pragma-define:CRT_ENABLE_STDIO=0
+LDFLAGS_EXTRA_H89-CPM += -pragma-define:CRT_ENABLE_COMMANDLINE=0
+
+# HDOS loads a program at 2280H and keeps everything from S.SYSM - S.OMAX up
+# for itself and the drivers it has loaded: D090H once FN: is in, which it
+# is when GMAIL runs from a FujiNet disk. That is 44.5K where CP/M has 54K,
+# so the HDOS build has overlays. Three screens' code -- the index fetch, the
+# inbox and reader together, and the form -- ride in a window under the
+# program, one at a time, read from the end of GMAIL.ABS as they are wanted
+# (src/h89/ovl.asm); GM_OVL marks the calls into them.
+#
+#   2280H  the stack, 510 bytes (z88dk's own 4480H org is Heath's split
+#          octal 042.200 misread)
+#   2480H  the overlay window, H89_OVL_SIZE
+#          the program, then BSS, which is not in the file
+#
+# tools/h89/hdosovl.py checks that no overlay calls into another but through
+# the loader, that each fits the window, and that the end of BSS is under
+# H89_HDOS_TOP; then it packs the overlays onto GMAIL.ABS. The window is
+# sized for the largest overlay (the inbox and reader), and gm_body takes
+# what is left under the ceiling. Check hdosovl.py's lines in the build
+# output before raising either.
+CFLAGS_EXTRA_H89-HDOS = $(H89_KNOBS) -DGM_OVERLAYS -DBODY_ROWS=$(H89_HDOS_BODY_ROWS)
+H89_HDOS_BODY_ROWS ?= 132
+H89_OVL_WIN = 0x2480
+H89_OVL_SIZE ?= 0x1600
+H89_HDOS_ORG = $(shell printf '0x%X' $$(($(H89_OVL_WIN) + $(H89_OVL_SIZE))))
+H89_HDOS_TOP ?= 0xD090
+
+H89_OVL_fetch = src/sanitize.c src/h89/ui_fetch.c
+H89_OVL_browse = src/body.c src/wrap.c src/h89/ui_inbox.c src/h89/ui_msg.c
+H89_OVL_compose = src/compose.c src/form.c src/h89/ui_form.c
+
+# The startup's BSS clear is src/h89/tpa.asm's, after it has checked there is
+# room; the crt's stack goes two bytes under the window, since it pops a
+# word it never pushed.
+LDFLAGS_EXTRA_H89-HDOS  = -m -pragma-define:CRT_ORG_CODE=$(H89_HDOS_ORG)
+LDFLAGS_EXTRA_H89-HDOS += -pragma-define:REGISTER_SP=$(shell printf '0x%X' $$(($(H89_OVL_WIN) - 2)))
+LDFLAGS_EXTRA_H89-HDOS += -pragma-define:CLIB_OPEN_MAX=0
+LDFLAGS_EXTRA_H89-HDOS += -pragma-define:CRT_ENABLE_STDIO=0
+LDFLAGS_EXTRA_H89-HDOS += -pragma-define:CRT_ENABLE_COMMANDLINE=0
+LDFLAGS_EXTRA_H89-HDOS += -pragma-define:CLIB_EXIT_STACK_SIZE=0
+LDFLAGS_EXTRA_H89-HDOS += -pragma-define:CRT_INITIALIZE_BSS=0
+LDFLAGS_EXTRA_H89-HDOS += -pragma-define:CRT_TRIM_BSS=1
+LDFLAGS_EXTRA_H89-HDOS += -pragma-define:MMAP=-1 -Ca-Isrc/h89
+LDFLAGS_EXTRA_H89-HDOS += -pragma-define:H89_OVL_WIN=$(H89_OVL_WIN)
+ASFLAGS_EXTRA_H89-HDOS  = -DH89_HDOS -DH89_OVL_WIN=$(H89_OVL_WIN)
+ASFLAGS_EXTRA_H89-HDOS += -DH89_ORG=$(H89_HDOS_ORG)
+
+# fujinet-lib for the H89 is the h89-setup-after-reset branch, which has no
+# release archive (and carries fn_default_timeout / fn_device_error, which
+# net.c needs). `make h89-fnlib` copies a checkout (FNLIB_H89, by default the
+# one beside this repo) into _cache/, where the defoogi container can see it,
+# and the library is built from that copy by the same z88dk that links the
+# program:
+#
+#   make h89-fnlib
+#   defoogi make h89-cpm h89-hdos
+#
+# The copy's path is spelled out rather than built on $(CACHE_DIR): a
+# platform pass reads this file before mekkogx defines that, and the rule
+# below names its target as it is read. h89-fnlib itself and the post-link
+# step are further down, past the include, so that neither becomes what a
+# bare `make` builds.
+FNLIB_H89 ?= $(HOME)/Workspace/fujinet-lib
+FNLIB_H89_SRC = _cache/fujinet-lib-h89
+
+ifneq ($(filter h89-cpm h89-hdos,$(PLATFORM)),)
+  FUJINET_LIB := __UNDEFINED__
+  FNLIB_H89_LIB = $(FNLIB_H89_SRC)/r2r/$(PLATFORM)/fujinet.$(PLATFORM).lib
+  EXTRA_INCLUDE += $(FNLIB_H89_SRC)/include
+  LIBS += -L$(FNLIB_H89_SRC)/r2r/$(PLATFORM) -lfujinet.$(PLATFORM).lib
+  EXECUTABLE_EXTRA_DEPS += $(FNLIB_H89_LIB)
+
+# Every object includes the library's headers, so the library comes first.
+$(patsubst %.c,build/$(PRODUCT)/$(PLATFORM)/%.o,$(wildcard src/*.c src/h89/*.c)): | $(FNLIB_H89_LIB)
+
+$(FNLIB_H89_LIB):
+	@[ -d $(FNLIB_H89_SRC)/bus/h89 ] || { echo "No $(FNLIB_H89_SRC): run 'make h89-fnlib' on the host first" >&2; exit 1; }
+	MAKEFLAGS= $(MAKE) -C $(FNLIB_H89_SRC) $(PLATFORM)/r2r
+
+# z80asm writes no dependency file for an .asm, and the build's -include of
+# one would otherwise fall through to the top level's catch-all.
+build/$(PRODUCT)/$(PLATFORM)/src/h89/ovl.d build/$(PRODUCT)/$(PLATFORM)/src/h89/tpa.d: ;
+endif
+
+# Each overlay's whole files, code and literals; the functions that ride in
+# one from a file that stays resident say so with a #pragma codeseg.
+ifeq ($(PLATFORM),h89-hdos)
+$(foreach o,fetch browse compose,$(eval \
+  $(patsubst %.c,build/$(PRODUCT)/$(PLATFORM)/%.o,$(H89_OVL_$(o))): \
+    private CFLAGS += --codeseg=code_ovl_$(o) --constseg=rodata_ovl_$(o)))
+endif
+
 # HIRESTXT_LIB can be
 # - a version number such as 0.5.0.2
 # - a directory which contains the built library
@@ -358,9 +490,31 @@ PLATFORM_COMBOS = \
   atarixe+=atari \
   msxrom+=msx \
   msxdos+=msx \
-  adam_cpm+=adam
+  adam_cpm+=adam \
+  h89-cpm+=h89 \
+  h89-hdos+=h89
 
 include mekkogx/toplevel-rules.mk
+
+# The H89's fujinet-lib, copied where defoogi can see it (see above).
+.PHONY: h89-fnlib
+h89-fnlib:
+	rm -rf $(FNLIB_H89_SRC)
+	mkdir -p $(FNLIB_H89_SRC)
+	cp -r $(FNLIB_H89)/Makefile $(FNLIB_H89)/include $(FNLIB_H89)/common $(FNLIB_H89)/bus $(FNLIB_H89)/makefiles $(FNLIB_H89_SRC)/
+	(cd $(FNLIB_H89) && git rev-parse --short HEAD && git status --porcelain Makefile bus/h89 common include makefiles) > $(FNLIB_H89_SRC)/VERSION
+
+# The H89's memory budget (see CFLAGS_EXTRA_H89-CPM), and the .COM cut where
+# BSS starts: z88dk writes BSS into it as zeros, which makes it too long for
+# the 62K CCP to load. The map is written beside the program.
+h89-cpm/executable-post::
+	python3 tools/h89/budget.py r2r/h89-cpm/gmail.map --trim $(wildcard r2r/h89-cpm/gmail.com r2r/h89-cpm/GMAIL.COM)
+
+# The HDOS build's checks and budget, and the overlays packed onto the
+# program (see CFLAGS_EXTRA_H89-HDOS).
+h89-hdos/executable-post::
+	python3 tools/h89/hdosovl.py r2r/h89-hdos/gmail --objs build/$(PRODUCT)/h89-hdos \
+	  --win $(H89_OVL_WIN) --size $(H89_OVL_SIZE) --top $(H89_HDOS_TOP)
 
 # If you need to add extra platform-specific steps, do it below:
 #   coco/r2r:: coco/custom-step1
