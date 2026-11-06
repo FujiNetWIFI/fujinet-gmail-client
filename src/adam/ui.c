@@ -186,6 +186,73 @@ void ui_busy(unsigned char reason)
     }
 }
 
+#ifdef GM_PROGRESS_UI
+/* Diagnostic: row 15 is the last row of the VDP's second "third" in
+   Graphics II mode (rows 8-15, 16-23 are the others). Moved to 14 to test
+   whether that boundary is why "Authorizing..." truncates there. */
+#define PROGRESS_MSG_ROW    (FLAT_BODY + 1)
+#define PROGRESS_BAR_ROW    (FLAT_BODY + 3)
+
+void ui_auth_phase(void)
+{
+    static const char msg[] = "Authorizing...";
+    unsigned char len = (unsigned char) (sizeof(msg) - 1);
+    unsigned char col = (unsigned char) ((SCR_COLS - len) / 2);
+
+    scr_row_clear(PROGRESS_MSG_ROW);
+    scr_field(PROGRESS_MSG_ROW, col, msg, len, A_BODY);
+}
+
+void ui_fetch_progress(unsigned char current, unsigned char total)
+{
+    unsigned char bar_width, fill_len, i, empty_len;
+    unsigned char bar_col;
+    unsigned long numerator;
+
+    if (total == 0)
+        return;
+
+    bar_width = 24;
+
+    scr_row_clear(PROGRESS_MSG_ROW);
+    scr_row_clear(PROGRESS_BAR_ROW);
+
+    strcpy(sbuf, "Loading ");
+    utoa(current, nbuf, 10);
+    strcat(sbuf, nbuf);
+    strcat(sbuf, " of ");
+    utoa(total, nbuf, 10);
+    strcat(sbuf, nbuf);
+    scr_center(PROGRESS_MSG_ROW, sbuf, A_BODY);
+
+    numerator = (unsigned long) current * bar_width;
+    fill_len = (unsigned char) (numerator / total);
+    if (fill_len > bar_width)
+        fill_len = bar_width;
+
+    bar_col = (unsigned char) ((SCR_COLS - (bar_width + 2)) / 2);
+
+    scr_text(PROGRESS_BAR_ROW, bar_col, "[", A_BODY);
+
+    if (fill_len > 0) {
+        for (i = 0; i < fill_len; i++)
+            sbuf[i] = ' ';
+        sbuf[fill_len] = 0;
+        scr_field(PROGRESS_BAR_ROW, (unsigned char) (bar_col + 1), sbuf, fill_len, A_HEADER);
+    }
+
+    empty_len = (unsigned char) (bar_width - fill_len);
+    if (empty_len > 0) {
+        for (i = 0; i < empty_len; i++)
+            sbuf[i] = '-';
+        sbuf[empty_len] = 0;
+        scr_text(PROGRESS_BAR_ROW, (unsigned char) (bar_col + 1 + fill_len), sbuf, A_DIM);
+    }
+
+    scr_text(PROGRESS_BAR_ROW, (unsigned char) (bar_col + bar_width + 1), "]", A_BODY);
+}
+#endif
+
 void ui_sent(void)
 {
     flat_screen();

@@ -70,11 +70,17 @@ CFLAGSNES = -DGM_FAR_BODY -DIDX_MAX=10 -DENT_SUBJ_LEN=96 -DBODY_COLS=64
 CFLAGSNES += -DBODY_ROWS=1728 -DLINE_CAP=256 -DMSG_ROWS=20
 CFLAGSNES += -DFRM_NBODY=32 -DFRM_VBODY=10 -DFRM_BODY_COLS=62
 
+# Keep in step with CFLAGS_EXTRA_H89-CPM (and its H89_BODY_ROWS). The H89's
+# 76-column wrap is the only one that is neither the Apple's 78 nor a
+# 32/40-column screen: the reader's frame takes two columns each side.
+CFLAGSH89 = -DBODY_COLS=76 -DBODY_ROWS=160 -DLINE_CAP=256 -DENT_SUBJ_LEN=128
+CFLAGSH89 += -DFRM_NBODY=42 -DFRM_VBODY=14 -DFRM_BODY_COLS=75
+
 SRC = hosttest.c ../src/wrap.c ../src/sanitize.c ../src/body.c ../src/date.c \
       ../src/form.c ../src/tick.c
 
 all: hosttest hosttest80 hosttest32 hosttestadam hosttestdos hosttestdos40 \
-     hosttestnes
+     hosttestnes hosttesth89
 	./hosttest
 	./hosttest80
 	./hosttest32
@@ -82,6 +88,7 @@ all: hosttest hosttest80 hosttest32 hosttestadam hosttestdos hosttestdos40 \
 	./hosttestdos
 	./hosttestdos40
 	./hosttestnes
+	./hosttesth89
 
 # Makefile is a prerequisite because the shapes are defined in it: editing
 # CFLAGS32 to match a backend and getting a stale binary that still asserts the
@@ -109,8 +116,11 @@ hosttestdos40: $(DEPS)
 hosttestnes: $(DEPS)
 	$(CC) $(CFLAGS) $(CFLAGSNES) -o $@ $(SRC) farbody.c
 
+hosttesth89: $(DEPS)
+	$(CC) $(CFLAGS) $(CFLAGSH89) -o $@ $(SRC)
+
 clean:
 	rm -f hosttest hosttest80 hosttest32 hosttestadam hosttestdos hosttestdos40 \
-	      hosttestnes
+	      hosttestnes hosttesth89
 
 .PHONY: all clean

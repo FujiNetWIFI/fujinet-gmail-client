@@ -116,8 +116,9 @@ void plat_anykey(void)
  * move, because on this keyboard the left arrow *is* the erase key --
  * BASIC's own convention -- which leaves the editor append-and-backspace:
  * there is no key left to walk the cursor with, and a 32-cell window does
- * not miss it. inkey() yields the 6847's uppercase-only set, which is also
- * all the screen could echo.
+ * not miss it. inkey() yields the 6847's uppercase-only set, which on the
+ * 1/2 is also all the screen could echo; the CoCo 3 recovers lowercase
+ * below.
  */
 unsigned char plat_getch(void)
 {
@@ -139,7 +140,22 @@ unsigned char plat_getch(void)
         case KEY_LEFT:  return E_BS;
         }
 
-        if (c >= 0x20 && c < 0x7F)
+        if (c >= 0x20 && c < 0x7F) {
+#ifdef COCO3
+            /*
+             * The GIME's character generator has lowercase where the 6847
+             * had none, so invert the machine's convention the way
+             * fujinet-config does: a letter arrives lowercase unless SHIFT
+             * is actually down. The ROM has already folded the case out of
+             * the character, so the physical key row is the only way to
+             * tell. Only the form's read does this -- map() still sees the
+             * uppercase the command keys are matched against.
+             */
+            if (c >= 'A' && c <= 'Z' &&
+                !isKeyPressed(KEY_PROBE_SHIFT, KEY_BIT_SHIFT))
+                c = (unsigned char) (c + 0x20);
+#endif
             return c;
+        }
     }
 }
