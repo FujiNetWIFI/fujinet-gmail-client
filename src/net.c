@@ -177,6 +177,10 @@ static unsigned char st_ok(unsigned char code)
  * addressable after a failed 'O', so the same single status query recovers
  * the protocol's own code.
  *
+ * The NES is the SmartPort case a third time: its cartridge-mailbox bus layer
+ * turns a NAK into fn_device_error 144 but has no status byte to leave in
+ * fn_network_error, so an unauthorized grant read as a timeout there too.
+ *
  * The H89 is the same again: its FujiBus layer answers a NAKed open with
  * fn_device_error 144 and never touches fn_network_error, and the firmware
  * keeps the open's error for the STATUS that follows.
@@ -191,7 +195,7 @@ static unsigned char open_error(void)
        the failure path issues another device command and overwrites it. */
     gm_dev_ecode = GM_DEVICE_ERROR;
 
-#if defined(__APPLE2__) || defined(__MSDOS__) || defined(__H89__) || defined(GM_PROBE_OPEN_ERROR)
+#if defined(__APPLE2__) || defined(__MSDOS__) || defined(__NES__) || defined(__H89__) || defined(GM_PROBE_OPEN_ERROR)
     {
         unsigned char dev  = gm_dev_ecode;
         unsigned char code = probe();
@@ -318,7 +322,7 @@ void gm_calc_next(void)
 unsigned char gm_fetch_index(unsigned long range)
 {
     unsigned char code;
-    unsigned char i, n;
+    unsigned char i;
     unsigned int  left, have, want, j;
     int           got;
 
@@ -358,19 +362,47 @@ unsigned char gm_fetch_index(unsigned long range)
         return 0;
     }
 
-    n = (unsigned char) (st_bw / REC_STRIDE);
-    if (n > IDX_MAX)
-        n = IDX_MAX;
+    left = st_bw;               /* bytes the device says are readable now */
+    have = 0;                   /* how many of them are sitting in stage[] */
 
-    left = st_bw;
-    have = 0;
-
-    for (i = 0; i < n; i++) {
+    /*
+     * IDX_MAX is the only bound on the page. The count used to be derived from
+     * the first status as st_bw / REC_STRIDE, which is wrong on SmartPort: the
+     * IWM firmware clamps bytes-waiting to 512 however much is staged (see
+     * iwm/network.cpp), and 512 / 220 is 2 -- so the Apple II listed two
+     * messages per page and, being a short page, could not even go to the next
+     * one. Every other bus reports the true count and never noticed. The
+     * refill's short read below was always the real end-of-list test; this
+     * loop just stops asking the wrong question first.
+     */
+    for (i = 0; i < IDX_MAX; i++) {
+        /* Refill until a whole record is in hand. */
         while (have < REC_STRIDE) {
+            if (left == 0) {
+                /* One status does not necessarily describe the whole listing,
+                   so ask again rather than calling it the end. A stream that
+                   really has ended answers EOF, or zero. This is how
+                   gm_fetch_body() has always drained. */
+                gm_stage = "status";
+                code = probe();
+                if (!st_ok(code))
+                    break;      /* EOF or error -- drained */
+                left = st_bw;
+                if (left == 0)
+                    break;
+            }
+
             want = (left < (unsigned int) IDX_READ)
                  ? left : (unsigned int) IDX_READ;
-            if (want == 0)
-                break;
+#if !GM_PKT
+            /* stage[] is exactly one record on this bus, and a record can now
+               straddle a status boundary -- so never ask for more than the
+               part of it still missing. A packet bus must keep its reads
+               packet-sized instead, and carries GM_PKT bytes of slack past
+               REC_STRIDE so that an unclamped read still fits. */
+            if (want > (unsigned int) REC_STRIDE - have)
+                want = (unsigned int) REC_STRIDE - have;
+#endif
             gm_stage = "read";
             got = network_read(url, stage + have, want);
             if (got != (int) want)
@@ -639,6 +671,18 @@ unsigned char gm_send_end(void)
        that follows a close, so there is nothing useful to ask. Report the
        send optimistically; README carries the caveat. */
     plat_net_end();
+    return 1;
+#elif defined(__NES__)
+    /* The NES's FujiNet is the NDevice code, which forgets the channel at
+       the close -- a STATUS after it answers 207, not connected, whatever
+       happened. But that same close answers the commit itself, ACK for a
+       sent message and NAK for a refused one, and the mailbox bus hands
+       that back as network_close()'s own result. It cannot say why. */
+    plat_net_end();
+    if (closed != FN_ERR_OK) {
+        gm_ecode = GM_REJECTED;
+        return 0;
+    }
     return 1;
 #elif defined(__H89__)
     /*
