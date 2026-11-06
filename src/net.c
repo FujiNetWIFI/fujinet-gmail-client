@@ -25,6 +25,20 @@
 
 #include "gmail.h"
 
+/* fujinet-lib 5.x removed fn_device_error. The raw device code is no longer
+   exposed, so record 0 and recover the protocol's code with a status query
+   (the probe() path the SmartPort and MS-DOS buses already use). */
+#ifdef FNLIB_VERSION_MAJOR
+#define GM_DEVICE_ERROR 0
+#define GM_PROBE_OPEN_ERROR 1
+/* fn_default_timeout is gone too. It only ever mattered on the Atari (SIO
+   DTIMLO), which this client still builds against 4.11.2. */
+static unsigned char gm_timeout_unused;
+#define fn_default_timeout gm_timeout_unused
+#else
+#define GM_DEVICE_ERROR fn_device_error
+#endif
+
 /* ------------------------------------------------------------------ */
 /* State owned by the fetch layer                                      */
 /* ------------------------------------------------------------------ */
@@ -116,7 +130,7 @@ static unsigned char probe(void)
     st_err = 0;
 
     if (network_status(url, &st_bw, &st_conn, &st_err) != FN_ERR_OK) {
-        gm_dev_ecode = fn_device_error;
+        gm_dev_ecode = GM_DEVICE_ERROR;
         return GM_NOREPLY;
     }
 
@@ -175,9 +189,9 @@ static unsigned char open_error(void)
 {
     /* Capture the raw device code now: the network_close() on the way out of
        the failure path issues another device command and overwrites it. */
-    gm_dev_ecode = fn_device_error;
+    gm_dev_ecode = GM_DEVICE_ERROR;
 
-#if defined(__APPLE2__) || defined(__MSDOS__) || defined(__H89__)
+#if defined(__APPLE2__) || defined(__MSDOS__) || defined(__H89__) || defined(GM_PROBE_OPEN_ERROR)
     {
         unsigned char dev  = gm_dev_ecode;
         unsigned char code = probe();
@@ -191,7 +205,7 @@ static unsigned char open_error(void)
         return (code == GM_NOREPLY) ? 0 : code;
     }
 #else
-    if (fn_device_error == 144)
+    if (GM_DEVICE_ERROR == 144)
         return fn_network_error;
     return 0;
 #endif
@@ -576,7 +590,7 @@ void gm_send_put(const char *line)
     if (network_write(url, (const uint8_t *) line,
                       (uint16_t) len) != FN_ERR_OK) {
         wr_failed = 1;
-        gm_dev_ecode = fn_device_error;
+        gm_dev_ecode = GM_DEVICE_ERROR;
     }
 #endif
 }
